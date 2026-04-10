@@ -1044,25 +1044,30 @@ async function verifyPassword(storedHash: string, password: string): Promise<boo
   }
 
   const { iterations, salt, expectedHash } = parsedHash;
-  const keyMaterial = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(password),
-    "PBKDF2",
-    false,
-    ["deriveBits"],
-  );
-  const derivedBits = await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      hash: "SHA-256",
-      salt,
-      iterations,
-    },
-    keyMaterial,
-    expectedHash.byteLength * 8,
-  );
 
-  return constantTimeEqualBytes(new Uint8Array(derivedBits), expectedHash);
+  try {
+    const keyMaterial = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(password),
+      "PBKDF2",
+      false,
+      ["deriveBits"],
+    );
+    const derivedBits = await crypto.subtle.deriveBits(
+      {
+        name: "PBKDF2",
+        hash: "SHA-256",
+        salt,
+        iterations,
+      },
+      keyMaterial,
+      expectedHash.byteLength * 8,
+    );
+
+    return constantTimeEqualBytes(new Uint8Array(derivedBits), expectedHash);
+  } catch {
+    return false;
+  }
 }
 
 function parsePasswordHash(input: string): {
