@@ -8,8 +8,8 @@ A Cloudflare Worker that monitors [Able Carry](https://ablecarry.com) product pa
 - **JSON-LD parsing** -- extracts product availability from structured data embedded in product pages
 - **Push notifications** -- sends max-priority alerts through ntfy.sh when an item is back in stock
 - **Dashboard UI** -- dark-themed status page showing product name, last check time, and errors
-- **TOTP-protected actions** -- URL changes and manual stock checks require a valid TOTP code
-- **Security hardened** -- CSRF protection, rate limiting, constant-time TOTP comparison, security headers
+- **Password-protected URL updates** -- saving a new product URL requires the configured password
+- **Security hardened** -- CSRF protection, rate limiting, constant-time password comparison, security headers
 - **Cloudflare KV storage** -- all state is persisted in a KV namespace
 
 ## Setup
@@ -24,17 +24,15 @@ A Cloudflare Worker that monitors [Able Carry](https://ablecarry.com) product pa
 
 3. Create a KV namespace and add its ID to `wrangler.toml`.
 
-4. Set the TOTP secret:
+4. Set the URL update password:
 
    ```
-   wrangler secret put TOTP_SECRET
+   wrangler secret put URL_UPDATE_PASSWORD
    ```
 
-5. Add the same TOTP secret to your authenticator app (e.g. Google Authenticator, Authy).
+5. Subscribe to the `ablecarry-stock-monitor` topic in the [ntfy app](https://ntfy.sh).
 
-6. Subscribe to the `ablecarry-stock-monitor` topic in the [ntfy app](https://ntfy.sh).
-
-7. Deploy:
+6. Deploy:
 
    ```
    npm run deploy

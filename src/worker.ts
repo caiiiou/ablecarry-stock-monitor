@@ -21,8 +21,7 @@ interface ScheduledController {
 
 interface Env {
   STORE: KVNamespace;
-  TOTP_SECRET: string;
-  URL_UPDATE_PASSWORD?: string;
+  URL_UPDATE_PASSWORD: string;
 }
 
 interface RateLimitState {
@@ -738,7 +737,7 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
     return new Response(message, { status: 400 });
   }
 
-  const rateLimitError = await enforceTotpRateLimit(request, env);
+  const rateLimitError = await enforcePasswordRateLimit(request, env);
   if (rateLimitError) {
     return rateLimitError;
   }
@@ -749,11 +748,11 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
   }
 
   if (!constantTimeEqual(configuredPassword, password)) {
-    await recordFailedTotpAttempt(request, env);
+    await recordFailedPasswordAttempt(request, env);
     return redirectWithError(request, "Invalid password");
   }
 
-  await clearFailedTotpAttempts(request, env);
+  await clearFailedPasswordAttempts(request, env);
   await env.STORE.put("product_url", normalizedUrl);
   await env.STORE.put("product_name", "");
   await env.STORE.put("product_image", "");
@@ -1042,7 +1041,7 @@ async function sendNotification(productUrl: string, productName: string): Promis
 }
 
 function getUrlUpdatePassword(env: Env): string {
-  return String(env.URL_UPDATE_PASSWORD ?? env.TOTP_SECRET ?? "");
+  return String(env.URL_UPDATE_PASSWORD ?? "");
 }
 
 function constantTimeEqual(left: string, right: string): boolean {
@@ -1094,12 +1093,12 @@ function getClientIdentifier(request: Request): string {
   return ip && ip.length > 0 ? ip : "unknown";
 }
 
-function getTotpRateLimitKey(request: Request): string {
-  return `totp_rate_limit:${getClientIdentifier(request)}`;
+function getPasswordRateLimitKey(request: Request): string {
+  return `password_rate_limit:${getClientIdentifier(request)}`;
 }
 
-async function getTotpRateLimitState(request: Request, env: Env): Promise<RateLimitState> {
-  const stored = await env.STORE.get(getTotpRateLimitKey(request));
+async function getPasswordRateLimitState(request: Request, env: Env): Promise<RateLimitState> {
+  const stored = await env.STORE.get(getPasswordRateLimitKey(request));
 
   if (!stored) {
     return { failures: 0, lockedUntil: 0 };
@@ -1116,8 +1115,8 @@ async function getTotpRateLimitState(request: Request, env: Env): Promise<RateLi
   }
 }
 
-async function enforceTotpRateLimit(request: Request, env: Env): Promise<Response | null> {
-  const state = await getTotpRateLimitState(request, env);
+async function enforcePasswordRateLimit(request: Request, env: Env): Promise<Response | null> {
+  const state = await getPasswordRateLimitState(request, env);
 
   if (state.lockedUntil > Date.now()) {
     return redirectWithError(request, "Too many failed password attempts. Try again later.");
@@ -1126,9 +1125,9 @@ async function enforceTotpRateLimit(request: Request, env: Env): Promise<Respons
   return null;
 }
 
-async function recordFailedTotpAttempt(request: Request, env: Env): Promise<void> {
+async function recordFailedPasswordAttempt(request: Request, env: Env): Promise<void> {
   const now = Date.now();
-  const state = await getTotpRateLimitState(request, env);
+  const state = await getPasswordRateLimitState(request, env);
   const activeFailures = state.lockedUntil > now || state.lockedUntil === 0 ? state.failures : 0;
   const failures = activeFailures + 1;
   const nextState: RateLimitState = {
@@ -1136,12 +1135,12 @@ async function recordFailedTotpAttempt(request: Request, env: Env): Promise<void
     lockedUntil: failures >= 5 ? now + 15 * 60 * 1000 : 0,
   };
 
-  await env.STORE.put(getTotpRateLimitKey(request), JSON.stringify(nextState));
+  await env.STORE.put(getPasswordRateLimitKey(request), JSON.stringify(nextState));
 }
 
-async function clearFailedTotpAttempts(request: Request, env: Env): Promise<void> {
+async function clearFailedPasswordAttempts(request: Request, env: Env): Promise<void> {
   await env.STORE.put(
-    getTotpRateLimitKey(request),
+    getPasswordRateLimitKey(request),
     JSON.stringify({ failures: 0, lockedUntil: 0 } satisfies RateLimitState),
   );
 }
