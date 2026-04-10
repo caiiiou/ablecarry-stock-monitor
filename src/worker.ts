@@ -363,6 +363,47 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         text-decoration: underline;
       }
 
+      .topic-link {
+        position: relative;
+        display: inline-block;
+        padding-right: 2px;
+        overflow: hidden;
+        text-decoration: none;
+      }
+
+      .topic-link::after {
+        content: "";
+        position: absolute;
+        left: -20%;
+        bottom: -2px;
+        width: 120%;
+        height: 2px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, transparent, var(--accent), transparent);
+        transform: translateX(-120%);
+        opacity: 0;
+      }
+
+      .topic-link:hover {
+        text-decoration: none;
+        text-shadow: 0 0 16px rgba(94, 235, 212, 0.28);
+      }
+
+      .topic-link:hover::after {
+        opacity: 1;
+        animation: topic-link-sweep 650ms ease-out forwards;
+      }
+
+      @keyframes topic-link-sweep {
+        from {
+          transform: translateX(-120%);
+        }
+
+        to {
+          transform: translateX(120%);
+        }
+      }
+
       form {
         display: grid;
         gap: 14px;
@@ -560,7 +601,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
               <section class="metric">
                 <p class="metric-label">Notifications</p>
                 <p class="metric-value">
-                  <a class="link" href="https://ntfy.sh/${escapeHtml(NTFY_TOPIC)}" target="_blank" rel="noreferrer">
+                  <a class="link topic-link" href="https://ntfy.sh/${escapeHtml(NTFY_TOPIC)}" target="_blank" rel="noreferrer">
                     ${escapeHtml(NTFY_TOPIC)}
                   </a>
                 </p>
@@ -611,6 +652,8 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 type="url"
                 required
                 value="${escapeHtml(state.productUrl)}"
+                data-current-url="${escapeHtml(state.productUrl)}"
+                autocomplete="off"
                 placeholder="${escapeHtml(DEFAULT_PRODUCT_URL)}"
               />
               <label for="shared_totp_code">Verification code</label>
@@ -660,8 +703,25 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
     </main>
     <script>
       (() => {
+        const productUrlInput = document.querySelector('#product_url');
         const cooldownNotice = document.querySelector('#cooldown_notice');
         const cooldownTime = document.querySelector('#cooldown_time');
+
+        const resetProductUrlInput = () => {
+          if (!(productUrlInput instanceof HTMLInputElement)) {
+            return;
+          }
+
+          const currentUrl = productUrlInput.dataset.currentUrl;
+          if (!currentUrl) {
+            return;
+          }
+
+          productUrlInput.value = currentUrl;
+        };
+
+        resetProductUrlInput();
+        window.addEventListener('pageshow', resetProductUrlInput);
 
         if (!(cooldownNotice instanceof HTMLElement) || !(cooldownTime instanceof HTMLElement)) {
           return;
