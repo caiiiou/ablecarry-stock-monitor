@@ -2,7 +2,6 @@ const DEFAULT_PRODUCT_URL =
   "https://ablecarry.com/products/max-edc-earth-green?variant=51046764577080";
 const NTFY_TOPIC = "ablecarry-stock-monitor";
 const USER_AGENT = "Mozilla/5.0 (compatible; AbleCarryStockMonitor/1.0)";
-const MANUAL_CHECK_COOLDOWN_MS = 5 * 60 * 1000;
 
 interface KVNamespace {
   get(key: string): Promise<string | null>;
@@ -37,6 +36,7 @@ interface State {
   productImage: string | null;
   lastStatus: StockStatus;
   lastCheck: string | null;
+  lastInStock: string | null;
   lastError: string | null;
   notified: boolean;
 }
@@ -69,16 +69,8 @@ const worker = {
       return handleDashboard(request, env);
     }
 
-    if (request.method === "GET" && url.pathname === "/check") {
-      return handleRunCheck(request, env);
-    }
-
     if (request.method === "POST" && url.pathname === "/url") {
       return handleUpdateUrl(request, env);
-    }
-
-    if (request.method === "POST" && url.pathname === "/check") {
-      return handleRunCheck(request, env);
     }
 
     return new Response("Not Found", { status: 404 });
@@ -99,13 +91,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const state = await loadState(env);
   const formError = url.searchParams.get("error");
-  const now = Date.now();
-  const lastManualCheck = await getLastManualCheck(env);
-  const elapsedMs = now - lastManualCheck;
-  const cooldownSeconds =
-    lastManualCheck > 0 && elapsedMs < MANUAL_CHECK_COOLDOWN_MS
-      ? Math.ceil((MANUAL_CHECK_COOLDOWN_MS - elapsedMs) / 1000)
-      : 0;
   const productName = state.productName || "Unknown Product";
   const productUrlDisplay = formatProductUrlForDisplay(state.productUrl);
   const productImageMarkup = state.productImage
@@ -116,10 +101,10 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         loading="lazy"
       />`
     : "";
-  const lastCheckText = state.lastCheck ? formatTimestamp(state.lastCheck) : "Never";
   const statusText = formatStockStatus(state.lastStatus);
   const statusTone = state.lastStatus === "InStock" ? "status-live" : "status-idle";
-  const cooldownDisplay = cooldownSeconds > 0 ? formatCooldown(cooldownSeconds) : null;
+  const lastCheckMarkup = renderLocalTime(state.lastCheck);
+  const lastInStockMarkup = renderLocalTime(state.lastInStock);
 
   return htmlResponse(`<!doctype html>
 <html lang="en">
@@ -519,15 +504,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         box-shadow: 0 0 0 4px rgba(251, 113, 133, 0.12);
       }
 
-      .cooldown-box {
-        padding: 14px 16px;
-        border-radius: 14px;
-        border: 1px solid rgba(94, 235, 212, 0.18);
-        background: rgba(94, 235, 212, 0.08);
-        color: var(--accent);
-        line-height: 1.5;
-      }
-
       @media (max-width: 900px) {
         .layout {
           grid-template-columns: 1fr;
@@ -596,7 +572,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
             <div class="metric-grid">
               <section class="metric">
                 <p class="metric-label">Last Check</p>
-                <p class="metric-value">${escapeHtml(lastCheckText)}</p>
+                <p class="metric-value">${lastCheckMarkup}</p>
               </section>
               <section class="metric">
                 <p class="metric-label">Ntfy Topic</p>
@@ -686,17 +662,10 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
           </article>
 
           <article class="card">
-            <p class="section-label">Run Check Now</p>
-            ${
-              cooldownDisplay
-                ? `<div class="cooldown-box" id="cooldown_notice" data-cooldown-seconds="${cooldownSeconds}" role="status">
-              Check available in <span id="cooldown_time">${escapeHtml(cooldownDisplay)}</span>
-            </div>`
-                : ""
-            }
-            <div class="actions">
-              <a class="button-secondary" href="/check">Run Check Now</a>
-            </div>
+            <p class="section-label">Last In Stock</p>
+            <section class="metric">
+              <p class="metric-value">${lastInStockMarkup}</p>
+            </section>
           </article>
         </aside>
       </section>
@@ -704,8 +673,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
     <script>
       (() => {
         const productUrlInput = document.querySelector('#product_url');
-        const cooldownNotice = document.querySelector('#cooldown_notice');
-        const cooldownTime = document.querySelector('#cooldown_time');
 
         const resetProductUrlInput = () => {
           if (!(productUrlInput instanceof HTMLInputElement)) {
@@ -722,40 +689,27 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
         resetProductUrlInput();
         window.addEventListener('pageshow', resetProductUrlInput);
-
-        if (!(cooldownNotice instanceof HTMLElement) || !(cooldownTime instanceof HTMLElement)) {
-          return;
-        }
-
-        let remainingSeconds = Number.parseInt(
-          cooldownNotice.dataset.cooldownSeconds || '0',
-          10,
-        );
-
-        if (!Number.isFinite(remainingSeconds) || remainingSeconds <= 0) {
-          cooldownNotice.style.display = 'none';
-          return;
-        }
-
-        const formatCooldown = (totalSeconds) => {
-          const minutes = Math.floor(totalSeconds / 60);
-          const seconds = totalSeconds % 60;
-          return minutes + ':' + String(seconds).padStart(2, '0');
-        };
-
-        cooldownTime.textContent = formatCooldown(remainingSeconds);
-
-        const intervalId = window.setInterval(() => {
-          remainingSeconds -= 1;
-
-          if (remainingSeconds <= 0) {
-            cooldownNotice.style.display = 'none';
-            window.clearInterval(intervalId);
+        document.querySelectorAll('time[data-local]').forEach((element) => {
+          if (!(element instanceof HTMLTimeElement)) {
             return;
           }
 
-          cooldownTime.textContent = formatCooldown(remainingSeconds);
-        }, 1000);
+          const iso = element.getAttribute('datetime');
+          if (!iso) {
+            return;
+          }
+
+          const date = new Date(iso);
+          if (Number.isNaN(date.getTime())) {
+            return;
+          }
+
+          element.textContent = date.toLocaleString(undefined, {
+            dateStyle: 'medium',
+            timeStyle: 'medium',
+            timeZoneName: 'short',
+          });
+        });
       })();
     </script>
   </body>
@@ -802,41 +756,17 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
   }
 
   await clearFailedTotpAttempts(request, env);
-  await env.STORE.put("product_url", normalizedUrl);
-  await env.STORE.put("product_name", "");
-  await env.STORE.put("product_image", "");
-  await env.STORE.put("notified", "false");
-  await env.STORE.put("last_error", "");
-
+  const state = await loadState(env);
+  const next: State = {
+    ...state,
+    productUrl: normalizedUrl,
+    productName: null,
+    productImage: null,
+    lastError: null,
+    notified: false,
+  };
   try {
-    await runStockCheck(env);
-  } catch {
-    // Errors are persisted in KV for the dashboard to display.
-  }
-
-  return Response.redirect(new URL("/", request.url).toString(), 302);
-}
-
-async function handleRunCheck(request: Request, env: Env): Promise<Response> {
-  if (request.method === "POST") {
-    const csrfError = validateSameOriginRequest(request);
-    if (csrfError) {
-      return csrfError;
-    }
-  }
-
-  const now = Date.now();
-  const lastManualCheck = await getLastManualCheck(env);
-  const elapsedMs = now - lastManualCheck;
-
-  if (lastManualCheck > 0 && elapsedMs < MANUAL_CHECK_COOLDOWN_MS) {
-    return Response.redirect(new URL("/", request.url).toString(), 302);
-  }
-
-  await env.STORE.put("last_manual_check", String(now));
-
-  try {
-    await runStockCheck(env);
+    await runStockCheck(env, next);
   } catch {
     // Errors are persisted in KV for the dashboard to display.
   }
@@ -845,48 +775,35 @@ async function handleRunCheck(request: Request, env: Env): Promise<Response> {
 }
 
 async function loadState(env: Env): Promise<State> {
-  const [productUrl, productName, productImage, lastStatus, lastCheck, lastError, notified] =
-    await Promise.all([
-      env.STORE.get("product_url"),
-      env.STORE.get("product_name"),
-      env.STORE.get("product_image"),
-      env.STORE.get("last_status"),
-      env.STORE.get("last_check"),
-      env.STORE.get("last_error"),
-      env.STORE.get("notified"),
-    ]);
-
-  return {
-    productUrl: productUrl || DEFAULT_PRODUCT_URL,
-    productName: productName || null,
-    productImage: productImage || null,
-    lastStatus: normalizeStockStatus(lastStatus),
-    lastCheck: lastCheck || null,
-    lastError: lastError || null,
-    notified: notified === "true",
-  };
+  const stored = await env.STORE.get("state");
+  return parseState(stored);
 }
 
-async function runStockCheck(env: Env): Promise<"InStock" | "OutOfStock"> {
-  const state = await loadState(env);
+async function runStockCheck(
+  env: Env,
+  stateOverride?: State,
+): Promise<"InStock" | "OutOfStock"> {
+  const state = stateOverride ?? (await loadState(env));
   const now = new Date().toISOString();
 
   try {
     const { availability: currentStatus, productName, productImage } = await fetchProductDetails(
       state.productUrl,
     );
-    const nextNotified = currentStatus === "InStock";
     const shouldNotify =
       currentStatus === "InStock" && (!state.notified || state.lastStatus !== "InStock");
+    const next: State = {
+      ...state,
+      productName,
+      productImage,
+      lastStatus: currentStatus,
+      lastCheck: now,
+      lastInStock: currentStatus === "InStock" ? now : state.lastInStock,
+      lastError: null,
+      notified: currentStatus === "InStock",
+    };
 
-    await Promise.all([
-      env.STORE.put("last_status", currentStatus),
-      env.STORE.put("product_name", productName),
-      env.STORE.put("product_image", productImage || ""),
-      env.STORE.put("last_check", now),
-      env.STORE.put("last_error", ""),
-      env.STORE.put("notified", String(nextNotified)),
-    ]);
+    await env.STORE.put("state", JSON.stringify(next));
 
     if (shouldNotify) {
       await sendNotification(state.productUrl, productName);
@@ -895,7 +812,12 @@ async function runStockCheck(env: Env): Promise<"InStock" | "OutOfStock"> {
     return currentStatus;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await Promise.all([env.STORE.put("last_check", now), env.STORE.put("last_error", message)]);
+    const next: State = {
+      ...state,
+      lastCheck: now,
+      lastError: message,
+    };
+    await env.STORE.put("state", JSON.stringify(next));
     throw error;
   }
 }
@@ -1256,12 +1178,6 @@ async function clearFailedTotpAttempts(request: Request, env: Env): Promise<void
   );
 }
 
-async function getLastManualCheck(env: Env): Promise<number> {
-  const stored = await env.STORE.get("last_manual_check");
-  const parsed = Number.parseInt(stored || "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-}
-
 function validateProductUrl(input: string): string {
   let url: URL;
 
@@ -1302,19 +1218,6 @@ function formatStockStatus(status: StockStatus): string {
   return "Unknown";
 }
 
-function formatTimestamp(value: string): string {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return date.toLocaleString("en-US", {
-    dateStyle: "medium",
-    timeStyle: "medium",
-  });
-}
-
 function formatProductUrlForDisplay(input: string): string {
   try {
     const url = new URL(input);
@@ -1324,10 +1227,54 @@ function formatProductUrlForDisplay(input: string): string {
   }
 }
 
-function formatCooldown(totalSeconds: number): string {
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+function parseState(value: string | null): State {
+  if (!value) {
+    return defaultState();
+  }
+
+  try {
+    const parsed = JSON.parse(value) as Partial<State>;
+    return {
+      productUrl:
+        typeof parsed.productUrl === "string" && parsed.productUrl.length > 0
+          ? parsed.productUrl
+          : DEFAULT_PRODUCT_URL,
+      productName: typeof parsed.productName === "string" ? parsed.productName : null,
+      productImage: typeof parsed.productImage === "string" ? parsed.productImage : null,
+      lastStatus: normalizeStockStatus(
+        typeof parsed.lastStatus === "string" ? parsed.lastStatus : null,
+      ),
+      lastCheck: typeof parsed.lastCheck === "string" ? parsed.lastCheck : null,
+      lastInStock: typeof parsed.lastInStock === "string" ? parsed.lastInStock : null,
+      lastError: typeof parsed.lastError === "string" ? parsed.lastError : null,
+      notified: parsed.notified === true,
+    };
+  } catch {
+    return defaultState();
+  }
+}
+
+function defaultState(): State {
+  return {
+    productUrl: DEFAULT_PRODUCT_URL,
+    productName: null,
+    productImage: null,
+    lastStatus: "Unknown",
+    lastCheck: null,
+    lastInStock: null,
+    lastError: null,
+    notified: false,
+  };
+}
+
+function renderLocalTime(value: string | null): string {
+  if (!value) {
+    return "Never";
+  }
+
+  const date = new Date(value);
+  const fallback = Number.isNaN(date.getTime()) ? value : date.toUTCString();
+  return `<time datetime="${escapeHtml(value)}" data-local>${escapeHtml(fallback)}</time>`;
 }
 
 function htmlResponse(html: string): Response {
