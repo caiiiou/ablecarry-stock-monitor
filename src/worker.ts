@@ -34,6 +34,7 @@ type StockStatus = "InStock" | "OutOfStock" | "Unknown";
 interface State {
   productUrl: string;
   productName: string | null;
+  productImage: string | null;
   lastStatus: StockStatus;
   lastCheck: string | null;
   lastError: string | null;
@@ -43,11 +44,13 @@ interface State {
 interface ProductDetails {
   availability: "InStock" | "OutOfStock";
   productName: string;
+  productImage: string | null;
 }
 
 interface ProductSearchResult {
   availability: string | null;
   productName: string | null;
+  productImage: string | null;
 }
 
 type JsonValue =
@@ -99,6 +102,14 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
   const cooldownSeconds = parseCooldownSeconds(url.searchParams.get("cooldown"));
   const productName = state.productName || "Unknown Product";
   const productUrlDisplay = formatProductUrlForDisplay(state.productUrl);
+  const productImageMarkup = state.productImage
+    ? `<img
+        class="product-thumbnail"
+        src="${escapeHtml(state.productImage)}"
+        alt="${escapeHtml(productName)}"
+        loading="lazy"
+      />`
+    : "";
   const lastCheckText = state.lastCheck ? formatTimestamp(state.lastCheck) : "Never";
   const statusText = formatStockStatus(state.lastStatus);
   const statusTone = state.lastStatus === "InStock" ? "status-live" : "status-idle";
@@ -293,6 +304,28 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         background: rgba(15, 23, 42, 0.34);
       }
 
+      .product-metric {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .product-copy {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .product-thumbnail {
+        width: 92px;
+        height: 92px;
+        flex-shrink: 0;
+        object-fit: cover;
+        border-radius: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        background: rgba(15, 23, 42, 0.45);
+      }
+
       .metric-label {
         margin: 0 0 10px;
         color: var(--muted);
@@ -410,14 +443,14 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
       .totp-gated-button {
         opacity: 0.45;
-        filter: grayscale(0.35);
         pointer-events: none;
+        filter: grayscale(0.5);
       }
 
-      .totp-gated-button.totp-ready {
+      .button.totp-gated-button.totp-ready {
         opacity: 1;
-        filter: none;
         pointer-events: auto;
+        filter: none;
       }
 
       .lock-icon {
@@ -426,6 +459,15 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         justify-content: center;
         font-size: 0.95em;
         line-height: 1;
+        opacity: 0.4;
+      }
+
+      .totp-gated-button.totp-ready .lock-icon {
+        opacity: 0.4;
+      }
+
+      .totp-gated-button:not(.totp-ready) .lock-icon {
+        opacity: 0.4;
       }
 
       .error-box {
@@ -483,6 +525,17 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
           grid-template-columns: 1fr;
         }
 
+        .product-metric {
+          flex-direction: column;
+        }
+
+        .product-thumbnail {
+          width: 100%;
+          max-width: 140px;
+          height: auto;
+          aspect-ratio: 1;
+        }
+
         .actions {
           flex-direction: column;
         }
@@ -535,13 +588,16 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
           <article class="card">
             <p class="section-label">Product</p>
             <div class="metric-grid">
-              <section class="metric">
-                <p class="metric-label">URL</p>
-                <p class="metric-value">
-                  <a class="link" href="${escapeHtml(state.productUrl)}" target="_blank" rel="noreferrer">
-                    ${escapeHtml(productUrlDisplay)}
-                  </a>
-                </p>
+              <section class="metric product-metric">
+                <div class="product-copy">
+                  <p class="metric-label">URL</p>
+                  <p class="metric-value">
+                    <a class="link" href="${escapeHtml(state.productUrl)}" target="_blank" rel="noreferrer">
+                      ${escapeHtml(productUrlDisplay)}
+                    </a>
+                  </p>
+                </div>
+                ${productImageMarkup}
               </section>
             </div>
           </article>
@@ -555,21 +611,19 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         <aside class="stack">
           <article class="card">
             <p class="section-label">Security</p>
-            <form id="shared_totp_form">
-              <label for="shared_totp_code">TOTP Code</label>
-              <input
-                id="shared_totp_code"
-                name="shared_totp_code"
-                type="text"
-                inputmode="numeric"
-                pattern="[0-9]{6}"
-                minlength="6"
-                maxlength="6"
-                required
-                autocomplete="one-time-code"
-                placeholder="123456"
-              />
-            </form>
+            <label for="shared_totp_code">TOTP Code</label>
+            <input
+              id="shared_totp_code"
+              name="shared_totp_code"
+              type="text"
+              inputmode="numeric"
+              pattern="[0-9]{6}"
+              minlength="6"
+              maxlength="6"
+              required
+              autocomplete="one-time-code"
+              placeholder="123456"
+            />
           </article>
 
           <article class="card">
@@ -743,6 +797,7 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
   await clearFailedTotpAttempts(request, env);
   await env.STORE.put("product_url", normalizedUrl);
   await env.STORE.put("product_name", "");
+  await env.STORE.put("product_image", "");
   await env.STORE.put("notified", "false");
   await env.STORE.put("last_error", "");
 
@@ -784,10 +839,11 @@ async function handleRunCheck(request: Request, env: Env): Promise<Response> {
 }
 
 async function loadState(env: Env): Promise<State> {
-  const [productUrl, productName, lastStatus, lastCheck, lastError, notified] =
+  const [productUrl, productName, productImage, lastStatus, lastCheck, lastError, notified] =
     await Promise.all([
       env.STORE.get("product_url"),
       env.STORE.get("product_name"),
+      env.STORE.get("product_image"),
       env.STORE.get("last_status"),
       env.STORE.get("last_check"),
       env.STORE.get("last_error"),
@@ -797,6 +853,7 @@ async function loadState(env: Env): Promise<State> {
   return {
     productUrl: productUrl || DEFAULT_PRODUCT_URL,
     productName: productName || null,
+    productImage: productImage || null,
     lastStatus: normalizeStockStatus(lastStatus),
     lastCheck: lastCheck || null,
     lastError: lastError || null,
@@ -809,7 +866,7 @@ async function runStockCheck(env: Env): Promise<"InStock" | "OutOfStock"> {
   const now = new Date().toISOString();
 
   try {
-    const { availability: currentStatus, productName } = await fetchProductDetails(
+    const { availability: currentStatus, productName, productImage } = await fetchProductDetails(
       state.productUrl,
     );
     const nextNotified = currentStatus === "InStock";
@@ -819,6 +876,7 @@ async function runStockCheck(env: Env): Promise<"InStock" | "OutOfStock"> {
     await Promise.all([
       env.STORE.put("last_status", currentStatus),
       env.STORE.put("product_name", productName),
+      env.STORE.put("product_image", productImage || ""),
       env.STORE.put("last_check", now),
       env.STORE.put("last_error", ""),
       env.STORE.put("notified", String(nextNotified)),
@@ -850,7 +908,7 @@ async function fetchProductDetails(productUrl: string): Promise<ProductDetails> 
 
   const html = await response.text();
   const productDetails = extractProductDetailsFromJsonLd(html);
-  const { availability, productName } = productDetails;
+  const { availability, productName, productImage } = productDetails;
 
   if (!availability) {
     throw new Error("Could not find offers.availability in JSON-LD");
@@ -863,6 +921,7 @@ async function fetchProductDetails(productUrl: string): Promise<ProductDetails> 
   return {
     availability: availability.includes("InStock") ? "InStock" : "OutOfStock",
     productName,
+    productImage,
   };
 }
 
@@ -890,6 +949,7 @@ function extractProductDetailsFromJsonLd(html: string): ProductSearchResult {
   return {
     availability: null,
     productName: null,
+    productImage: null,
   };
 }
 
@@ -898,6 +958,7 @@ function findProductDetails(node: JsonValue | undefined): ProductSearchResult {
     return {
       availability: null,
       productName: null,
+      productImage: null,
     };
   }
 
@@ -912,6 +973,7 @@ function findProductDetails(node: JsonValue | undefined): ProductSearchResult {
     return {
       availability: null,
       productName: null,
+      productImage: null,
     };
   }
 
@@ -919,11 +981,13 @@ function findProductDetails(node: JsonValue | undefined): ProductSearchResult {
     return {
       availability: null,
       productName: null,
+      productImage: null,
     };
   }
 
   let productName = typeof node.name === "string" ? node.name.trim() : null;
   let availability: string | null = null;
+  let productImage = extractImageUrl(node.image);
   const offers = node.offers;
 
   if (offers) {
@@ -950,7 +1014,7 @@ function findProductDetails(node: JsonValue | undefined): ProductSearchResult {
   }
 
   if (availability && productName) {
-    return { availability, productName };
+    return { availability, productName, productImage };
   }
 
   for (const value of Object.values(node)) {
@@ -961,12 +1025,46 @@ function findProductDetails(node: JsonValue | undefined): ProductSearchResult {
     if (!productName && result.productName) {
       productName = result.productName;
     }
+    if (!productImage && result.productImage) {
+      productImage = result.productImage;
+    }
     if (availability && productName) {
-      return { availability, productName };
+      return { availability, productName, productImage };
     }
   }
 
-  return { availability, productName };
+  return { availability, productName, productImage };
+}
+
+function extractImageUrl(value: JsonValue | undefined): string | null {
+  if (typeof value === "string") {
+    const imageUrl = value.trim();
+    return imageUrl.length > 0 ? imageUrl : null;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const imageUrl = extractImageUrl(entry);
+      if (imageUrl) {
+        return imageUrl;
+      }
+    }
+
+    return null;
+  }
+
+  if (value && typeof value === "object") {
+    const candidate =
+      typeof value.url === "string"
+        ? value.url
+        : typeof value.contentUrl === "string"
+          ? value.contentUrl
+          : null;
+
+    return candidate && candidate.trim().length > 0 ? candidate.trim() : null;
+  }
+
+  return null;
 }
 
 async function sendNotification(productUrl: string, productName: string): Promise<void> {
@@ -1237,7 +1335,7 @@ function htmlResponse(html: string): Response {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
       "content-security-policy":
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; img-src 'self' data:; connect-src https://ntfy.sh https://ablecarry.com",
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; img-src 'self' data: https://ablecarry.com https://cdn.shopify.com; connect-src https://ntfy.sh https://ablecarry.com",
       "referrer-policy": "same-origin",
       "x-content-type-options": "nosniff",
       "x-frame-options": "DENY",
