@@ -444,35 +444,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         background: var(--bg-hover);
       }
 
-      .totp-gated-button {
-        opacity: 0.45;
-        pointer-events: none;
-        filter: grayscale(0.5);
-      }
-
-      .button.totp-gated-button.totp-ready {
-        opacity: 1;
-        pointer-events: auto;
-        filter: none;
-      }
-
-      .lock-icon {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 0.95em;
-        line-height: 1;
-        opacity: 0.4;
-      }
-
-      .totp-gated-button.totp-ready .lock-icon {
-        opacity: 0.4;
-      }
-
-      .totp-gated-button:not(.totp-ready) .lock-icon {
-        opacity: 0.4;
-      }
-
       .error-box {
         min-height: 120px;
         padding: 18px;
@@ -643,10 +614,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
               />
               <input type="hidden" name="totp_code" value="" />
               <div class="actions">
-                <button class="button totp-gated-button" type="submit">
-                  <span class="lock-icon" aria-hidden="true">🔒</span>
-                  <span>Save URL</span>
-                </button>
+                <button class="button" type="submit">Save URL</button>
               </div>
             </form>
           </article>
@@ -671,24 +639,10 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
       (() => {
         const totpInput = document.querySelector('#shared_totp_code');
         const forms = document.querySelectorAll('form[data-shared-totp-form]');
-        const buttons = document.querySelectorAll('.totp-gated-button');
 
-        if (!totpInput || forms.length === 0 || buttons.length === 0) {
+        if (!(totpInput instanceof HTMLInputElement) || forms.length === 0) {
           return;
         }
-
-        const updateButtons = () => {
-          const isReady = /^\d{6}$/.test(totpInput.value);
-
-          for (const button of buttons) {
-            button.classList.toggle('totp-ready', isReady);
-
-            const lockIcon = button.querySelector('.lock-icon');
-            if (lockIcon) {
-              lockIcon.textContent = isReady ? '🔓' : '🔒';
-            }
-          }
-        };
 
         for (const form of forms) {
           form.addEventListener('submit', (event) => {
@@ -697,7 +651,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
             if (!(hiddenTotpInput instanceof HTMLInputElement) || !/^\d{6}$/.test(totpValue)) {
               event.preventDefault();
-              updateButtons();
               totpInput.focus();
               return;
             }
@@ -705,9 +658,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
             hiddenTotpInput.value = totpValue;
           });
         }
-
-        totpInput.addEventListener('input', updateButtons);
-        updateButtons();
       })();
 
       (() => {
