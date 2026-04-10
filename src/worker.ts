@@ -807,7 +807,7 @@ async function sendNotification(productUrl: string, productName: string): Promis
     method: "POST",
     headers: {
       Title: `Able Carry In Stock: ${productName}`,
-      Priority: "urgent",
+      Priority: "max",
       Tags: "rotating_light",
     },
     body: `${productName} is back in stock.\n\n${productUrl}`,
