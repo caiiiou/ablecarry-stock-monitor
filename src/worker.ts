@@ -689,6 +689,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
         resetProductUrlInput();
         window.addEventListener('pageshow', resetProductUrlInput);
+        const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         document.querySelectorAll('time[data-local]').forEach((element) => {
           if (!(element instanceof HTMLTimeElement)) {
             return;
@@ -708,6 +709,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
             dateStyle: 'medium',
             timeStyle: 'medium',
             timeZoneName: 'short',
+            ...(localTimeZone ? { timeZone: localTimeZone } : {}),
           });
         });
       })();
@@ -1273,7 +1275,7 @@ function renderLocalTime(value: string | null): string {
   }
 
   const date = new Date(value);
-  const fallback = Number.isNaN(date.getTime()) ? value : date.toUTCString();
+  const fallback = Number.isNaN(date.getTime()) ? value : date.toISOString();
   return `<time datetime="${escapeHtml(value)}" data-local>${escapeHtml(fallback)}</time>`;
 }
 
