@@ -179,17 +179,10 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
       .header {
         display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
+        align-items: center;
+        justify-content: flex-end;
         gap: 20px;
         margin-bottom: 28px;
-      }
-
-      h1 {
-        margin: 0;
-        font-size: clamp(2rem, 5vw, 2.9rem);
-        line-height: 1;
-        letter-spacing: -0.03em;
       }
 
       .tag {
@@ -488,9 +481,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
   <body>
     <main class="shell">
       <header class="header">
-        <div>
-          <h1>Stock Monitor</h1>
-        </div>
         <a class="tag" href="https://ntfy.sh/${escapeHtml(NTFY_TOPIC)}" target="_blank" rel="noreferrer">
           ntfy topic
         </a>
