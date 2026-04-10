@@ -377,6 +377,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        gap: 8px;
         min-height: 46px;
         padding: 0 18px;
         border-radius: 14px;
@@ -405,6 +406,26 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
       .button-secondary:hover {
         background: var(--bg-hover);
+      }
+
+      .totp-gated-button {
+        opacity: 0.45;
+        filter: grayscale(0.35);
+        pointer-events: none;
+      }
+
+      .totp-gated-button.totp-ready {
+        opacity: 1;
+        filter: none;
+        pointer-events: auto;
+      }
+
+      .lock-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.95em;
+        line-height: 1;
       }
 
       .error-box {
@@ -561,7 +582,10 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 placeholder="123456"
               />
               <div class="actions">
-                <button class="button" type="submit">Save URL</button>
+                <button class="button totp-gated-button" type="submit">
+                  <span class="lock-icon" aria-hidden="true">🔒</span>
+                  <span>Save URL</span>
+                </button>
               </div>
             </form>
           </article>
@@ -583,13 +607,46 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 placeholder="123456"
               />
               <div class="actions">
-                <button class="button-secondary" type="submit">Run Check Now</button>
+                <button class="button-secondary totp-gated-button" type="submit">
+                  <span class="lock-icon" aria-hidden="true">🔒</span>
+                  <span>Run Check Now</span>
+                </button>
               </div>
             </form>
           </article>
         </aside>
       </section>
     </main>
+    <script>
+      (() => {
+        const forms = document.querySelectorAll('form');
+
+        for (const form of forms) {
+          const totpInput = form.querySelector('input[name="totp_code"]');
+          const buttons = form.querySelectorAll('.totp-gated-button');
+
+          if (!totpInput || buttons.length === 0) {
+            continue;
+          }
+
+          const updateButtons = () => {
+            const isReady = /^\d{6}$/.test(totpInput.value);
+
+            for (const button of buttons) {
+              button.classList.toggle('totp-ready', isReady);
+
+              const lockIcon = button.querySelector('.lock-icon');
+              if (lockIcon) {
+                lockIcon.textContent = isReady ? '🔓' : '🔒';
+              }
+            }
+          };
+
+          totpInput.addEventListener('input', updateButtons);
+          updateButtons();
+        }
+      })();
+    </script>
   </body>
 </html>`);
 }
