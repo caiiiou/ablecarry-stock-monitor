@@ -1,54 +1,69 @@
 # ablecarry-stock-monitor
 
-A Cloudflare Worker that monitors [Able Carry](https://ablecarry.com) product pages for stock availability and sends push notifications via [ntfy.sh](https://ntfy.sh) when items come back in stock.
+`ablecarry-stock-monitor` is a Cloudflare Worker that watches a single Able Carry product page, reads stock state from the page's JSON-LD metadata, and posts an alert to `ntfy.sh` when the item becomes available.
 
-## Features
+## Overview
 
-- **Scheduled stock checks** -- runs every minute via Cron Trigger
-- **Manual checks with cooldown** -- the dashboard can trigger an immediate check, limited by a 5 minute cooldown
-- **JSON-LD parsing** -- extracts product availability from structured data embedded in product pages
-- **Push notifications** -- sends max-priority alerts through ntfy.sh when an item is back in stock
-- **Dashboard UI** -- dark-themed status page showing product name, current URL, last check time, and errors
-- **TOTP-protected actions** -- URL changes and manual stock checks require a valid TOTP code
-- **Security hardened** -- CSRF protection, rate limiting, constant-time TOTP comparison, security headers
-- **Cloudflare KV storage** -- all state is persisted in a KV namespace
+The worker stores its monitoring state in Cloudflare KV and exposes a small dashboard at `/`. The dashboard shows the currently tracked product, the latest observed stock status, the last successful check time, the most recent in-stock timestamp, and the last recorded error.
 
-## Setup
+The monitored product URL can be changed from the dashboard. URL updates are protected with a shared six-digit TOTP code. After a valid update, the worker immediately performs a fresh stock check so the saved state reflects the new product as quickly as possible.
 
-1. Clone the repository.
+## How Monitoring Works
 
-2. Install dependencies:
+The worker runs on a one-minute cron schedule. For each check, it requests the configured Able Carry product page, scans `application/ld+json` blocks, and extracts:
 
-   ```
-   npm install
-   ```
+- product availability
+- product name
+- product image
 
-3. Create a KV namespace and add its ID to `wrangler.toml`.
+If the product transitions into stock, the worker sends a high-priority notification to the `ablecarry-stock-monitor` topic on `ntfy.sh`. It suppresses duplicate alerts while the item remains in stock and only notifies again after the product has gone out of stock and later returns.
 
-   KV is required for persisted state including the saved product URL, stock status, last check time, notification state, last error, and TOTP rate limiting.
+## Dashboard
 
-4. Set the TOTP secret:
+The dashboard is a server-rendered page designed to expose the current worker state without additional client-side dependencies. It includes:
 
-   ```
-   wrangler secret put TOTP_SECRET
-   ```
+- current stock status
+- tracked product name
+- tracked product URL
+- product thumbnail when one is available
+- last check timestamp
+- last in-stock timestamp
+- most recent error message
+- direct link to the `ntfy.sh` topic
 
-5. Add the same TOTP secret to your authenticator app (e.g. Google Authenticator, Authy).
+Displayed timestamps are localized in the browser so the page reads naturally in the viewer's local time zone.
 
-6. Subscribe to the `ablecarry-stock-monitor` topic in the [ntfy app](https://ntfy.sh).
+## Security Model
 
-7. Deploy:
+Administrative actions are intentionally narrow. The only mutable action exposed by the worker is updating the tracked product URL, and that flow is protected by:
 
-   ```
-   npm run deploy
-   ```
+- TOTP verification
+- same-origin request validation for form submissions
+- rate limiting for failed TOTP attempts
+- constant-time TOTP comparison
+- restrictive response security headers
 
-   Alternatively, connect the repository to your Cloudflare dashboard for automatic deployments via GitHub.
+The worker also validates that the submitted URL is an Able Carry product URL before persisting it.
 
-## Usage
+## Stored State
 
-1. Open the dashboard.
-2. Enter the current 6-digit authenticator code to save a new product URL.
-3. Use `Run Check Now` when you want to trigger an immediate stock check.
+The KV-backed state includes:
 
-The URL field resets back to the currently saved product URL when the page reloads or is restored by the browser, so unsaved edits do not linger in the form.
+- tracked product URL
+- product name
+- product image URL
+- last known stock status
+- last check timestamp
+- last in-stock timestamp
+- last error message
+- whether an in-stock notification has already been sent for the current stock cycle
+
+## Runtime Surface
+
+- `GET /` renders the dashboard
+- `POST /url` validates and saves a new tracked product URL
+- scheduled events run the recurring stock check
+
+## Notes
+
+This project is intentionally scoped to a single tracked product at a time. The default configuration targets an Able Carry product page, but the actual monitored URL is part of persisted state and can be changed through the dashboard when authorized.
