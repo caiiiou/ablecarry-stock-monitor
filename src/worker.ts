@@ -705,12 +705,16 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
             return;
           }
 
-          element.textContent = date.toLocaleString(undefined, {
-            dateStyle: 'medium',
-            timeStyle: 'medium',
+          element.textContent = new Intl.DateTimeFormat(undefined, {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            second: '2-digit',
             timeZoneName: 'short',
             ...(localTimeZone ? { timeZone: localTimeZone } : {}),
-          });
+          }).format(date);
         });
       })();
     </script>
