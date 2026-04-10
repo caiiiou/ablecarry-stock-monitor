@@ -304,6 +304,16 @@ async function handleDashboard(env) {
           <div class="value">${escapeHtml(lastCheckText)}</div>
         </article>
 
+        <article class="card">
+          <h2>Ntfy Notifications</h2>
+          <div class="value">
+            <a class="url" href="https://ntfy.sh/${escapeHtml(NTFY_TOPIC)}" target="_blank" rel="noreferrer">
+              https://ntfy.sh/${escapeHtml(NTFY_TOPIC)}
+            </a>
+          </div>
+          <div class="value muted">Subscribe to this topic in the Ntfy app to receive stock alerts</div>
+        </article>
+
         <article class="card" style="grid-column: 1 / -1;">
           <h2>Last Error</h2>
           <div class="value ${state.lastError ? "error" : "muted"}">
