@@ -599,7 +599,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 <p class="metric-value">${escapeHtml(lastCheckText)}</p>
               </section>
               <section class="metric">
-                <p class="metric-label">Notifications</p>
+                <p class="metric-label">Ntfy Topic</p>
                 <p class="metric-value">
                   <a class="link topic-link" href="https://ntfy.sh/${escapeHtml(NTFY_TOPIC)}" target="_blank" rel="noreferrer">
                     ${escapeHtml(NTFY_TOPIC)}
@@ -645,7 +645,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                   ? `<div class="form-error" role="alert">${escapeHtml(formError)}</div>`
                   : ""
               }
-              <label for="product_url">Able Carry product URL</label>
+              <label for="product_url">Able Carry Product URL</label>
               <input
                 id="product_url"
                 name="product_url"
@@ -656,7 +656,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 autocomplete="off"
                 placeholder="${escapeHtml(DEFAULT_PRODUCT_URL)}"
               />
-              <label for="shared_totp_code">Verification code</label>
+              <label for="shared_totp_code">TOTP Code</label>
               <input
                 id="shared_totp_code"
                 name="totp_code"
