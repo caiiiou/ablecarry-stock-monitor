@@ -99,7 +99,13 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const state = await loadState(env);
   const formError = url.searchParams.get("error");
-  const cooldownSeconds = parseCooldownSeconds(url.searchParams.get("cooldown"));
+  const now = Date.now();
+  const lastManualCheck = await getLastManualCheck(env);
+  const elapsedMs = now - lastManualCheck;
+  const cooldownSeconds =
+    lastManualCheck > 0 && elapsedMs < MANUAL_CHECK_COOLDOWN_MS
+      ? Math.ceil((MANUAL_CHECK_COOLDOWN_MS - elapsedMs) / 1000)
+      : 0;
   const productName = state.productName || "Unknown Product";
   const productUrlDisplay = formatProductUrlForDisplay(state.productUrl);
   const productImageMarkup = state.productImage
@@ -304,24 +310,21 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         background: rgba(15, 23, 42, 0.34);
       }
 
-      .product-metric {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
+      .product-panel {
+        display: grid;
         gap: 18px;
       }
 
-      .product-copy {
-        min-width: 0;
-        flex: 1;
+      .product-image-wrap {
+        display: flex;
+        justify-content: flex-start;
       }
 
       .product-thumbnail {
-        width: 92px;
-        height: 92px;
-        flex-shrink: 0;
+        width: 120px;
+        height: 120px;
         object-fit: cover;
-        border-radius: 14px;
+        border-radius: 18px;
         border: 1px solid rgba(148, 163, 184, 0.16);
         background: rgba(15, 23, 42, 0.45);
       }
@@ -525,15 +528,10 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
           grid-template-columns: 1fr;
         }
 
-        .product-metric {
-          flex-direction: column;
-        }
-
         .product-thumbnail {
           width: 100%;
           max-width: 140px;
           height: auto;
-          aspect-ratio: 1;
         }
 
         .actions {
@@ -587,17 +585,21 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
           <article class="card">
             <p class="section-label">Product</p>
-            <div class="metric-grid">
-              <section class="metric product-metric">
-                <div class="product-copy">
-                  <p class="metric-label">URL</p>
-                  <p class="metric-value">
-                    <a class="link" href="${escapeHtml(state.productUrl)}" target="_blank" rel="noreferrer">
-                      ${escapeHtml(productUrlDisplay)}
-                    </a>
-                  </p>
-                </div>
+            <div class="product-panel">
+              ${
+                productImageMarkup
+                  ? `<div class="product-image-wrap">
                 ${productImageMarkup}
+              </div>`
+                  : ""
+              }
+              <section class="metric">
+                <p class="metric-label">URL</p>
+                <p class="metric-value">
+                  <a class="link" href="${escapeHtml(state.productUrl)}" target="_blank" rel="noreferrer">
+                    ${escapeHtml(productUrlDisplay)}
+                  </a>
+                </p>
               </section>
             </div>
           </article>
@@ -609,23 +611,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         </div>
 
         <aside class="stack">
-          <article class="card">
-            <p class="section-label">Security</p>
-            <label for="shared_totp_code">TOTP Code</label>
-            <input
-              id="shared_totp_code"
-              name="shared_totp_code"
-              type="text"
-              inputmode="numeric"
-              pattern="[0-9]{6}"
-              minlength="6"
-              maxlength="6"
-              required
-              autocomplete="one-time-code"
-              placeholder="123456"
-            />
-          </article>
-
           <article class="card">
             <p class="section-label">Update URL</p>
             <form method="POST" action="/url" data-shared-totp-form>
@@ -642,6 +627,19 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 required
                 value="${escapeHtml(state.productUrl)}"
                 placeholder="${escapeHtml(DEFAULT_PRODUCT_URL)}"
+              />
+              <label for="shared_totp_code">TOTP Code</label>
+              <input
+                id="shared_totp_code"
+                name="shared_totp_code"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]{6}"
+                minlength="6"
+                maxlength="6"
+                required
+                autocomplete="one-time-code"
+                placeholder="123456"
               />
               <input type="hidden" name="totp_code" value="" />
               <div class="actions">
@@ -823,8 +821,7 @@ async function handleRunCheck(request: Request, env: Env): Promise<Response> {
   const elapsedMs = now - lastManualCheck;
 
   if (lastManualCheck > 0 && elapsedMs < MANUAL_CHECK_COOLDOWN_MS) {
-    const remainingSeconds = Math.ceil((MANUAL_CHECK_COOLDOWN_MS - elapsedMs) / 1000);
-    return redirectWithCooldown(request, remainingSeconds);
+    return Response.redirect(new URL("/", request.url).toString(), 302);
   }
 
   await env.STORE.put("last_manual_check", String(now));
@@ -1318,11 +1315,6 @@ function formatProductUrlForDisplay(input: string): string {
   }
 }
 
-function parseCooldownSeconds(value: string | null): number {
-  const parsed = Number.parseInt(value || "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-}
-
 function formatCooldown(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -1346,12 +1338,6 @@ function htmlResponse(html: string): Response {
 function redirectWithError(request: Request, message: string): Response {
   const redirectUrl = new URL("/", request.url);
   redirectUrl.searchParams.set("error", message);
-  return Response.redirect(redirectUrl.toString(), 302);
-}
-
-function redirectWithCooldown(request: Request, secondsRemaining: number): Response {
-  const redirectUrl = new URL("/", request.url);
-  redirectUrl.searchParams.set("cooldown", String(secondsRemaining));
   return Response.redirect(redirectUrl.toString(), 302);
 }
 
