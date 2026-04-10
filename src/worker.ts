@@ -469,6 +469,15 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         line-height: 1.5;
       }
 
+      .form-error-inline {
+        margin-top: -6px;
+      }
+
+      input[aria-invalid="true"] {
+        border-color: rgba(251, 113, 133, 0.45);
+        box-shadow: 0 0 0 4px rgba(251, 113, 133, 0.12);
+      }
+
       .cooldown-box {
         padding: 14px 16px;
         border-radius: 14px;
@@ -589,7 +598,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         <aside class="stack">
           <article class="card">
             <p class="section-label">Update URL</p>
-            <form method="POST" action="/url" data-shared-totp-form>
+            <form method="POST" action="/url">
               ${
                 formError
                   ? `<div class="form-error" role="alert">${escapeHtml(formError)}</div>`
@@ -604,10 +613,10 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 value="${escapeHtml(state.productUrl)}"
                 placeholder="${escapeHtml(DEFAULT_PRODUCT_URL)}"
               />
-              <label for="shared_totp_code">TOTP Code</label>
+              <label for="shared_totp_code">Verification code</label>
               <input
                 id="shared_totp_code"
-                name="shared_totp_code"
+                name="totp_code"
                 type="text"
                 inputmode="numeric"
                 pattern="[0-9]{6}"
@@ -616,8 +625,17 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 required
                 autocomplete="one-time-code"
                 placeholder="123456"
+                ${formError ? 'aria-invalid="true" aria-describedby="shared_totp_code_error"' : ""}
               />
-              <input type="hidden" name="totp_code" value="" />
+              ${
+                formError
+                  ? `<div
+                id="shared_totp_code_error"
+                class="form-error form-error-inline"
+                role="alert"
+              >${escapeHtml(formError)}</div>`
+                  : ""
+              }
               <div class="actions">
                 <button class="button" type="submit">Save URL</button>
               </div>
@@ -641,30 +659,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
       </section>
     </main>
     <script>
-      (() => {
-        const totpInput = document.querySelector('#shared_totp_code');
-        const forms = document.querySelectorAll('form[data-shared-totp-form]');
-
-        if (!(totpInput instanceof HTMLInputElement) || forms.length === 0) {
-          return;
-        }
-
-        for (const form of forms) {
-          form.addEventListener('submit', (event) => {
-            const hiddenTotpInput = form.querySelector('input[name="totp_code"]');
-            const totpValue = totpInput.value.trim();
-
-            if (!(hiddenTotpInput instanceof HTMLInputElement) || !/^\d{6}$/.test(totpValue)) {
-              event.preventDefault();
-              totpInput.focus();
-              return;
-            }
-
-            hiddenTotpInput.value = totpValue;
-          });
-        }
-      })();
-
       (() => {
         const cooldownNotice = document.querySelector('#cooldown_notice');
         const cooldownTime = document.querySelector('#cooldown_time');
