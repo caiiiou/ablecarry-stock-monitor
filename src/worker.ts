@@ -21,7 +21,7 @@ interface ScheduledController {
 
 interface Env {
   STORE: KVNamespace;
-  URL_UPDATE_PASSWORD_HASH: string;
+  TOTP_SECRET: string;
 }
 
 interface RateLimitState {
@@ -598,7 +598,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         <aside class="stack">
           <article class="card">
             <p class="section-label">Update URL</p>
-            <form id="update_url_form" method="POST" action="/url">
+            <form method="POST" action="/url">
               ${
                 formError
                   ? `<div class="form-error" role="alert">${escapeHtml(formError)}</div>`
@@ -613,15 +613,24 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 value="${escapeHtml(state.productUrl)}"
                 placeholder="${escapeHtml(DEFAULT_PRODUCT_URL)}"
               />
+              <label for="shared_totp_code">Verification code</label>
               <input
-                id="update_url_password"
-                name="password"
-                type="hidden"
+                id="shared_totp_code"
+                name="totp_code"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]{6}"
+                minlength="6"
+                maxlength="6"
+                required
+                autocomplete="one-time-code"
+                placeholder="123456"
+                ${formError ? 'aria-invalid="true" aria-describedby="shared_totp_code_error"' : ""}
               />
               ${
                 formError
                   ? `<div
-                id="update_url_password_error"
+                id="shared_totp_code_error"
                 class="form-error form-error-inline"
                 role="alert"
               >${escapeHtml(formError)}</div>`
@@ -651,29 +660,8 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
     </main>
     <script>
       (() => {
-        const updateUrlForm = document.querySelector('#update_url_form');
-        const passwordInput = document.querySelector('#update_url_password');
         const cooldownNotice = document.querySelector('#cooldown_notice');
         const cooldownTime = document.querySelector('#cooldown_time');
-
-        if (updateUrlForm instanceof HTMLFormElement && passwordInput instanceof HTMLInputElement) {
-          updateUrlForm.addEventListener('submit', (event) => {
-            if (passwordInput.value.length > 0) {
-              return;
-            }
-
-            event.preventDefault();
-
-            const password = window.prompt('Enter the password to save the URL');
-
-            if (password === null) {
-              return;
-            }
-
-            passwordInput.value = password;
-            updateUrlForm.requestSubmit();
-          });
-        }
 
         if (!(cooldownNotice instanceof HTMLElement) || !(cooldownTime instanceof HTMLElement)) {
           return;
@@ -722,10 +710,14 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
 
   const formData = await request.formData();
   const submittedUrl = String(formData.get("product_url") || "").trim();
-  const password = String(formData.get("password") || "");
+  const totpCode = String(formData.get("totp_code") || "").trim();
 
   if (!submittedUrl) {
     return new Response("Missing product_url", { status: 400 });
+  }
+
+  if (!/^\d{6}$/.test(totpCode)) {
+    return redirectWithError(request, "Invalid TOTP code");
   }
 
   let normalizedUrl: string;
@@ -737,18 +729,19 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
     return new Response(message, { status: 400 });
   }
 
-  const rateLimitError = await enforcePasswordRateLimit(request, env);
+  const rateLimitError = await enforceTotpRateLimit(request, env);
   if (rateLimitError) {
     return rateLimitError;
   }
 
-  const isPasswordValid = await verifyPassword(env.URL_UPDATE_PASSWORD_HASH, password);
-  if (!isPasswordValid) {
-    await recordFailedPasswordAttempt(request, env);
-    return redirectWithError(request, "Invalid password");
+  const isTotpValid = await validateTOTP(env.TOTP_SECRET, totpCode);
+
+  if (!isTotpValid) {
+    await recordFailedTotpAttempt(request, env);
+    return redirectWithError(request, "Invalid TOTP code");
   }
 
-  await clearFailedPasswordAttempts(request, env);
+  await clearFailedTotpAttempts(request, env);
   await env.STORE.put("product_url", normalizedUrl);
   await env.STORE.put("product_name", "");
   await env.STORE.put("product_image", "");
@@ -1036,95 +1029,81 @@ async function sendNotification(productUrl: string, productName: string): Promis
   }
 }
 
-async function verifyPassword(storedHash: string, password: string): Promise<boolean> {
-  const parsedHash = parsePasswordHash(storedHash);
+function base32Decode(input: string): Uint8Array {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const normalized = input.toUpperCase().replace(/[\s=]+/g, "");
+  let bits = 0;
+  let value = 0;
+  const bytes: number[] = [];
 
-  if (!parsedHash) {
-    return false;
+  for (const char of normalized) {
+    const index = alphabet.indexOf(char);
+    if (index === -1) {
+      throw new Error("Invalid base32 secret");
+    }
+
+    value = (value << 5) | index;
+    bits += 5;
+
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((value >>> bits) & 0xff);
+    }
   }
 
-  const { iterations, salt, expectedHash } = parsedHash;
-
-  try {
-    const keyMaterial = await crypto.subtle.importKey(
-      "raw",
-      new TextEncoder().encode(password),
-      "PBKDF2",
-      false,
-      ["deriveBits"],
-    );
-    const derivedBits = await crypto.subtle.deriveBits(
-      {
-        name: "PBKDF2",
-        hash: "SHA-256",
-        salt,
-        iterations,
-      },
-      keyMaterial,
-      expectedHash.byteLength * 8,
-    );
-
-    return constantTimeEqualBytes(new Uint8Array(derivedBits), expectedHash);
-  } catch {
-    return false;
-  }
+  return new Uint8Array(bytes);
 }
 
-function parsePasswordHash(input: string): {
-  iterations: number;
-  salt: Uint8Array;
-  expectedHash: Uint8Array;
-} | null {
-  const normalized = String(input || "").trim();
+async function generateTOTP(secret: string, counter: number): Promise<string> {
+  const secretBytes = base32Decode(secret);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    secretBytes,
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"],
+  );
+  const counterBytes = new ArrayBuffer(8);
+  const counterView = new DataView(counterBytes);
+  const high = Math.floor(counter / 2 ** 32);
+  const low = counter >>> 0;
+  counterView.setUint32(0, high, false);
+  counterView.setUint32(4, low, false);
 
-  if (!normalized) {
-    return null;
-  }
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, counterBytes));
+  const offset = signature[signature.length - 1] & 0x0f;
+  const binary =
+    ((signature[offset] & 0x7f) << 24) |
+    ((signature[offset + 1] & 0xff) << 16) |
+    ((signature[offset + 2] & 0xff) << 8) |
+    (signature[offset + 3] & 0xff);
+  const otp = binary % 1_000_000;
 
-  const [algorithm, iterationsText, saltText, hashText] = normalized.split("$");
-
-  if (algorithm !== "pbkdf2_sha256" || !iterationsText || !saltText || !hashText) {
-    return null;
-  }
-
-  const iterations = Number.parseInt(iterationsText, 10);
-  if (!Number.isFinite(iterations) || iterations <= 0) {
-    return null;
-  }
-
-  try {
-    return {
-      iterations,
-      salt: base64UrlDecode(saltText),
-      expectedHash: base64UrlDecode(hashText),
-    };
-  } catch {
-    return null;
-  }
+  return otp.toString().padStart(6, "0");
 }
 
-function base64UrlDecode(input: string): Uint8Array {
-  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-  const decoded = atob(padded);
-  const bytes = new Uint8Array(decoded.length);
+async function validateTOTP(secret: string, code: string): Promise<boolean> {
+  const currentCounter = Math.floor(Date.now() / 1000 / 30);
 
-  for (let index = 0; index < decoded.length; index += 1) {
-    bytes[index] = decoded.charCodeAt(index);
+  for (let offset = -1; offset <= 1; offset += 1) {
+    const expected = await generateTOTP(secret, currentCounter + offset);
+    if (constantTimeEqual(expected, code)) {
+      return true;
+    }
   }
 
-  return bytes;
+  return false;
 }
 
-function constantTimeEqualBytes(left: Uint8Array, right: Uint8Array): boolean {
-  if (left.byteLength !== right.byteLength) {
+function constantTimeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) {
     return false;
   }
 
   let result = 0;
 
-  for (let index = 0; index < left.byteLength; index += 1) {
-    result |= left[index] ^ right[index];
+  for (let index = 0; index < left.length; index += 1) {
+    result |= left.charCodeAt(index) ^ right.charCodeAt(index);
   }
 
   return result === 0;
@@ -1165,12 +1144,12 @@ function getClientIdentifier(request: Request): string {
   return ip && ip.length > 0 ? ip : "unknown";
 }
 
-function getPasswordRateLimitKey(request: Request): string {
-  return `password_rate_limit:${getClientIdentifier(request)}`;
+function getTotpRateLimitKey(request: Request): string {
+  return `totp_rate_limit:${getClientIdentifier(request)}`;
 }
 
-async function getPasswordRateLimitState(request: Request, env: Env): Promise<RateLimitState> {
-  const stored = await env.STORE.get(getPasswordRateLimitKey(request));
+async function getTotpRateLimitState(request: Request, env: Env): Promise<RateLimitState> {
+  const stored = await env.STORE.get(getTotpRateLimitKey(request));
 
   if (!stored) {
     return { failures: 0, lockedUntil: 0 };
@@ -1187,19 +1166,19 @@ async function getPasswordRateLimitState(request: Request, env: Env): Promise<Ra
   }
 }
 
-async function enforcePasswordRateLimit(request: Request, env: Env): Promise<Response | null> {
-  const state = await getPasswordRateLimitState(request, env);
+async function enforceTotpRateLimit(request: Request, env: Env): Promise<Response | null> {
+  const state = await getTotpRateLimitState(request, env);
 
   if (state.lockedUntil > Date.now()) {
-    return redirectWithError(request, "Too many failed password attempts. Try again later.");
+    return redirectWithError(request, "Too many failed TOTP attempts. Try again later.");
   }
 
   return null;
 }
 
-async function recordFailedPasswordAttempt(request: Request, env: Env): Promise<void> {
+async function recordFailedTotpAttempt(request: Request, env: Env): Promise<void> {
   const now = Date.now();
-  const state = await getPasswordRateLimitState(request, env);
+  const state = await getTotpRateLimitState(request, env);
   const activeFailures = state.lockedUntil > now || state.lockedUntil === 0 ? state.failures : 0;
   const failures = activeFailures + 1;
   const nextState: RateLimitState = {
@@ -1207,12 +1186,12 @@ async function recordFailedPasswordAttempt(request: Request, env: Env): Promise<
     lockedUntil: failures >= 5 ? now + 15 * 60 * 1000 : 0,
   };
 
-  await env.STORE.put(getPasswordRateLimitKey(request), JSON.stringify(nextState));
+  await env.STORE.put(getTotpRateLimitKey(request), JSON.stringify(nextState));
 }
 
-async function clearFailedPasswordAttempts(request: Request, env: Env): Promise<void> {
+async function clearFailedTotpAttempts(request: Request, env: Env): Promise<void> {
   await env.STORE.put(
-    getPasswordRateLimitKey(request),
+    getTotpRateLimitKey(request),
     JSON.stringify({ failures: 0, lockedUntil: 0 } satisfies RateLimitState),
   );
 }
