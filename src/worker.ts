@@ -92,10 +92,10 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
   const state = await loadState(env);
   const formError = url.searchParams.get("error");
   const productName = state.productName || "Unknown Product";
-  const isInStock = state.lastStatus === "InStock";
+  const productUrlDisplay = formatProductUrlForDisplay(state.productUrl);
   const lastCheckText = state.lastCheck ? formatTimestamp(state.lastCheck) : "Never";
   const statusText = formatStockStatus(state.lastStatus);
-  const statusTone = isInStock ? "status-live" : "status-idle";
+  const statusTone = state.lastStatus === "InStock" ? "status-live" : "status-idle";
 
   return htmlResponse(`<!doctype html>
 <html lang="en">
@@ -533,13 +533,9 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 <p class="metric-label">URL</p>
                 <p class="metric-value">
                   <a class="link" href="${escapeHtml(state.productUrl)}" target="_blank" rel="noreferrer">
-                    ${escapeHtml(state.productUrl)}
+                    ${escapeHtml(productUrlDisplay)}
                   </a>
                 </p>
-              </section>
-              <section class="metric">
-                <p class="metric-label">Current State</p>
-                <p class="metric-value ${isInStock ? "" : "muted"}">${escapeHtml(statusText)}</p>
               </section>
             </div>
           </article>
@@ -552,8 +548,27 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
         <aside class="stack">
           <article class="card">
+            <p class="section-label">Security</p>
+            <form id="shared_totp_form">
+              <label for="shared_totp_code">TOTP Code</label>
+              <input
+                id="shared_totp_code"
+                name="shared_totp_code"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]{6}"
+                minlength="6"
+                maxlength="6"
+                required
+                autocomplete="one-time-code"
+                placeholder="123456"
+              />
+            </form>
+          </article>
+
+          <article class="card">
             <p class="section-label">Update URL</p>
-            <form method="POST" action="/url">
+            <form method="POST" action="/url" data-shared-totp-form>
               ${
                 formError
                   ? `<div class="form-error" role="alert">${escapeHtml(formError)}</div>`
@@ -568,19 +583,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 value="${escapeHtml(state.productUrl)}"
                 placeholder="${escapeHtml(DEFAULT_PRODUCT_URL)}"
               />
-              <label for="totp_code">TOTP Code</label>
-              <input
-                id="totp_code"
-                name="totp_code"
-                type="text"
-                inputmode="numeric"
-                pattern="[0-9]{6}"
-                minlength="6"
-                maxlength="6"
-                required
-                autocomplete="one-time-code"
-                placeholder="123456"
-              />
+              <input type="hidden" name="totp_code" value="" />
               <div class="actions">
                 <button class="button totp-gated-button" type="submit">
                   <span class="lock-icon" aria-hidden="true">🔒</span>
@@ -592,20 +595,8 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
           <article class="card">
             <p class="section-label">Run Check Now</p>
-            <form method="POST" action="/check">
-              <label for="check_totp_code">TOTP Code</label>
-              <input
-                id="check_totp_code"
-                name="totp_code"
-                type="text"
-                inputmode="numeric"
-                pattern="[0-9]{6}"
-                minlength="6"
-                maxlength="6"
-                required
-                autocomplete="one-time-code"
-                placeholder="123456"
-              />
+            <form method="POST" action="/check" data-shared-totp-form>
+              <input type="hidden" name="totp_code" value="" />
               <div class="actions">
                 <button class="button-secondary totp-gated-button" type="submit">
                   <span class="lock-icon" aria-hidden="true">🔒</span>
@@ -619,32 +610,45 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
     </main>
     <script>
       (() => {
-        const forms = document.querySelectorAll('form');
+        const totpInput = document.querySelector('#shared_totp_code');
+        const forms = document.querySelectorAll('form[data-shared-totp-form]');
+        const buttons = document.querySelectorAll('.totp-gated-button');
+
+        if (!totpInput || forms.length === 0 || buttons.length === 0) {
+          return;
+        }
+
+        const updateButtons = () => {
+          const isReady = /^\d{6}$/.test(totpInput.value);
+
+          for (const button of buttons) {
+            button.classList.toggle('totp-ready', isReady);
+
+            const lockIcon = button.querySelector('.lock-icon');
+            if (lockIcon) {
+              lockIcon.textContent = isReady ? '🔓' : '🔒';
+            }
+          }
+        };
 
         for (const form of forms) {
-          const totpInput = form.querySelector('input[name="totp_code"]');
-          const buttons = form.querySelectorAll('.totp-gated-button');
+          form.addEventListener('submit', (event) => {
+            const hiddenTotpInput = form.querySelector('input[name="totp_code"]');
+            const totpValue = totpInput.value.trim();
 
-          if (!totpInput || buttons.length === 0) {
-            continue;
-          }
-
-          const updateButtons = () => {
-            const isReady = /^\d{6}$/.test(totpInput.value);
-
-            for (const button of buttons) {
-              button.classList.toggle('totp-ready', isReady);
-
-              const lockIcon = button.querySelector('.lock-icon');
-              if (lockIcon) {
-                lockIcon.textContent = isReady ? '🔓' : '🔒';
-              }
+            if (!(hiddenTotpInput instanceof HTMLInputElement) || !/^\d{6}$/.test(totpValue)) {
+              event.preventDefault();
+              updateButtons();
+              totpInput.focus();
+              return;
             }
-          };
 
-          totpInput.addEventListener('input', updateButtons);
-          updateButtons();
+            hiddenTotpInput.value = totpValue;
+          });
         }
+
+        totpInput.addEventListener('input', updateButtons);
+        updateButtons();
       })();
     </script>
   </body>
@@ -1161,6 +1165,15 @@ function formatTimestamp(value: string): string {
     dateStyle: "medium",
     timeStyle: "medium",
   });
+}
+
+function formatProductUrlForDisplay(input: string): string {
+  try {
+    const url = new URL(input);
+    return `${url.host}${url.pathname}`.replace(/\/$/, "");
+  } catch {
+    return input;
+  }
 }
 
 function htmlResponse(html: string): Response {
