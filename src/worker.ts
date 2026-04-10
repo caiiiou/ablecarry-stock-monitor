@@ -22,6 +22,7 @@ interface ScheduledController {
 interface Env {
   STORE: KVNamespace;
   TOTP_SECRET: string;
+  URL_UPDATE_PASSWORD?: string;
 }
 
 interface RateLimitState {
@@ -598,7 +599,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         <aside class="stack">
           <article class="card">
             <p class="section-label">Update URL</p>
-            <form method="POST" action="/url">
+            <form id="update_url_form" method="POST" action="/url">
               ${
                 formError
                   ? `<div class="form-error" role="alert">${escapeHtml(formError)}</div>`
@@ -613,24 +614,15 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 value="${escapeHtml(state.productUrl)}"
                 placeholder="${escapeHtml(DEFAULT_PRODUCT_URL)}"
               />
-              <label for="shared_totp_code">Verification code</label>
               <input
-                id="shared_totp_code"
-                name="totp_code"
-                type="text"
-                inputmode="numeric"
-                pattern="[0-9]{6}"
-                minlength="6"
-                maxlength="6"
-                required
-                autocomplete="one-time-code"
-                placeholder="123456"
-                ${formError ? 'aria-invalid="true" aria-describedby="shared_totp_code_error"' : ""}
+                id="update_url_password"
+                name="password"
+                type="hidden"
               />
               ${
                 formError
                   ? `<div
-                id="shared_totp_code_error"
+                id="update_url_password_error"
                 class="form-error form-error-inline"
                 role="alert"
               >${escapeHtml(formError)}</div>`
@@ -660,8 +652,29 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
     </main>
     <script>
       (() => {
+        const updateUrlForm = document.querySelector('#update_url_form');
+        const passwordInput = document.querySelector('#update_url_password');
         const cooldownNotice = document.querySelector('#cooldown_notice');
         const cooldownTime = document.querySelector('#cooldown_time');
+
+        if (updateUrlForm instanceof HTMLFormElement && passwordInput instanceof HTMLInputElement) {
+          updateUrlForm.addEventListener('submit', (event) => {
+            if (passwordInput.value.length > 0) {
+              return;
+            }
+
+            event.preventDefault();
+
+            const password = window.prompt('Enter the password to save the URL');
+
+            if (password === null) {
+              return;
+            }
+
+            passwordInput.value = password;
+            updateUrlForm.requestSubmit();
+          });
+        }
 
         if (!(cooldownNotice instanceof HTMLElement) || !(cooldownTime instanceof HTMLElement)) {
           return;
@@ -710,14 +723,10 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
 
   const formData = await request.formData();
   const submittedUrl = String(formData.get("product_url") || "").trim();
-  const totpCode = String(formData.get("totp_code") || "").trim();
+  const password = String(formData.get("password") || "");
 
   if (!submittedUrl) {
     return new Response("Missing product_url", { status: 400 });
-  }
-
-  if (!/^\d{6}$/.test(totpCode)) {
-    return redirectWithError(request, "Invalid TOTP code");
   }
 
   let normalizedUrl: string;
@@ -734,11 +743,14 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
     return rateLimitError;
   }
 
-  const isTotpValid = await validateTOTP(env.TOTP_SECRET, totpCode);
+  const configuredPassword = getUrlUpdatePassword(env);
+  if (configuredPassword.length === 0) {
+    return redirectWithError(request, "Password is misconfigured on the server");
+  }
 
-  if (!isTotpValid) {
+  if (!constantTimeEqual(configuredPassword, password)) {
     await recordFailedTotpAttempt(request, env);
-    return redirectWithError(request, "Invalid TOTP code");
+    return redirectWithError(request, "Invalid password");
   }
 
   await clearFailedTotpAttempts(request, env);
@@ -1029,70 +1041,8 @@ async function sendNotification(productUrl: string, productName: string): Promis
   }
 }
 
-function base32Decode(input: string): Uint8Array {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  const normalized = input.toUpperCase().replace(/[\s=]+/g, "");
-  let bits = 0;
-  let value = 0;
-  const bytes: number[] = [];
-
-  for (const char of normalized) {
-    const index = alphabet.indexOf(char);
-    if (index === -1) {
-      throw new Error("Invalid base32 secret");
-    }
-
-    value = (value << 5) | index;
-    bits += 5;
-
-    if (bits >= 8) {
-      bits -= 8;
-      bytes.push((value >>> bits) & 0xff);
-    }
-  }
-
-  return new Uint8Array(bytes);
-}
-
-async function generateTOTP(secret: string, counter: number): Promise<string> {
-  const secretBytes = base32Decode(secret);
-  const key = await crypto.subtle.importKey(
-    "raw",
-    secretBytes,
-    { name: "HMAC", hash: "SHA-1" },
-    false,
-    ["sign"],
-  );
-  const counterBytes = new ArrayBuffer(8);
-  const counterView = new DataView(counterBytes);
-  const high = Math.floor(counter / 2 ** 32);
-  const low = counter >>> 0;
-  counterView.setUint32(0, high, false);
-  counterView.setUint32(4, low, false);
-
-  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, counterBytes));
-  const offset = signature[signature.length - 1] & 0x0f;
-  const binary =
-    ((signature[offset] & 0x7f) << 24) |
-    ((signature[offset + 1] & 0xff) << 16) |
-    ((signature[offset + 2] & 0xff) << 8) |
-    (signature[offset + 3] & 0xff);
-  const otp = binary % 1_000_000;
-
-  return otp.toString().padStart(6, "0");
-}
-
-async function validateTOTP(secret: string, code: string): Promise<boolean> {
-  const currentCounter = Math.floor(Date.now() / 1000 / 30);
-
-  for (let offset = -1; offset <= 1; offset += 1) {
-    const expected = await generateTOTP(secret, currentCounter + offset);
-    if (constantTimeEqual(expected, code)) {
-      return true;
-    }
-  }
-
-  return false;
+function getUrlUpdatePassword(env: Env): string {
+  return String(env.URL_UPDATE_PASSWORD ?? env.TOTP_SECRET ?? "");
 }
 
 function constantTimeEqual(left: string, right: string): boolean {
@@ -1170,7 +1120,7 @@ async function enforceTotpRateLimit(request: Request, env: Env): Promise<Respons
   const state = await getTotpRateLimitState(request, env);
 
   if (state.lockedUntil > Date.now()) {
-    return redirectWithError(request, "Too many failed TOTP attempts. Try again later.");
+    return redirectWithError(request, "Too many failed password attempts. Try again later.");
   }
 
   return null;
