@@ -7,7 +7,7 @@ send_metrics = false
 
 [[kv_namespaces]]
 binding = "STORE"
-id = "" # Will be filled after `wrangler kv namespace create STORE`
+id = "c908a83a97f24645bd149f705f67781c"
 
 [triggers]
 crons = ["* * * * *"]
