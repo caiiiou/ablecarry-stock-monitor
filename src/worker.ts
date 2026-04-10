@@ -607,6 +607,12 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
   await env.STORE.put("notified", "false");
   await env.STORE.put("last_error", "");
 
+  try {
+    await runStockCheck(env);
+  } catch {
+    // Errors are persisted in KV for the dashboard to display.
+  }
+
   return Response.redirect(new URL("/", request.url).toString(), 302);
 }
 
