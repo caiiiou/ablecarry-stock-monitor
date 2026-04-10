@@ -614,6 +614,13 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
         <aside class="stack">
           <article class="card">
+            <p class="section-label">Last In Stock</p>
+            <section class="metric">
+              <p class="metric-value">${lastInStockMarkup}</p>
+            </section>
+          </article>
+
+          <article class="card">
             <p class="section-label">Update URL</p>
             <form method="POST" action="/url">
               ${
@@ -659,13 +666,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 <button class="button" type="submit">Save URL</button>
               </div>
             </form>
-          </article>
-
-          <article class="card">
-            <p class="section-label">Last In Stock</p>
-            <section class="metric">
-              <p class="metric-value">${lastInStockMarkup}</p>
-            </section>
           </article>
         </aside>
       </section>
