@@ -9,7 +9,7 @@ A Cloudflare Worker that monitors [Able Carry](https://ablecarry.com) product pa
 - **Push notifications** -- sends max-priority alerts through ntfy.sh when an item is back in stock
 - **Dashboard UI** -- dark-themed status page showing product name, last check time, and errors
 - **Password-protected URL updates** -- saving a new product URL requires the configured password
-- **Security hardened** -- CSRF protection, rate limiting, constant-time password comparison, security headers
+- **Security hardened** -- CSRF protection, rate limiting, PBKDF2 password verification, security headers
 - **Cloudflare KV storage** -- all state is persisted in a KV namespace
 
 ## Setup
@@ -24,11 +24,13 @@ A Cloudflare Worker that monitors [Able Carry](https://ablecarry.com) product pa
 
 3. Create a KV namespace and add its ID to `wrangler.toml`.
 
-4. Set the URL update password:
+4. Set the URL update password hash:
 
    ```
-   wrangler secret put URL_UPDATE_PASSWORD
+   wrangler secret put URL_UPDATE_PASSWORD_HASH
    ```
+
+   Store a value in the format `pbkdf2_sha256$iterations$salt$hash`.
 
 5. Subscribe to the `ablecarry-stock-monitor` topic in the [ntfy app](https://ntfy.sh).
 

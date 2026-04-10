@@ -21,7 +21,7 @@ interface ScheduledController {
 
 interface Env {
   STORE: KVNamespace;
-  URL_UPDATE_PASSWORD: string;
+  URL_UPDATE_PASSWORD_HASH: string;
 }
 
 interface RateLimitState {
@@ -742,12 +742,8 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
     return rateLimitError;
   }
 
-  const configuredPassword = getUrlUpdatePassword(env);
-  if (configuredPassword.length === 0) {
-    return redirectWithError(request, "Password is misconfigured on the server");
-  }
-
-  if (!constantTimeEqual(configuredPassword, password)) {
+  const isPasswordValid = await verifyPassword(env.URL_UPDATE_PASSWORD_HASH, password);
+  if (!isPasswordValid) {
     await recordFailedPasswordAttempt(request, env);
     return redirectWithError(request, "Invalid password");
   }
@@ -1040,19 +1036,90 @@ async function sendNotification(productUrl: string, productName: string): Promis
   }
 }
 
-function getUrlUpdatePassword(env: Env): string {
-  return String(env.URL_UPDATE_PASSWORD ?? "");
+async function verifyPassword(storedHash: string, password: string): Promise<boolean> {
+  const parsedHash = parsePasswordHash(storedHash);
+
+  if (!parsedHash) {
+    return false;
+  }
+
+  const { iterations, salt, expectedHash } = parsedHash;
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"],
+  );
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      hash: "SHA-256",
+      salt,
+      iterations,
+    },
+    keyMaterial,
+    expectedHash.byteLength * 8,
+  );
+
+  return constantTimeEqualBytes(new Uint8Array(derivedBits), expectedHash);
 }
 
-function constantTimeEqual(left: string, right: string): boolean {
-  if (left.length !== right.length) {
+function parsePasswordHash(input: string): {
+  iterations: number;
+  salt: Uint8Array;
+  expectedHash: Uint8Array;
+} | null {
+  const normalized = String(input || "").trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  const [algorithm, iterationsText, saltText, hashText] = normalized.split("$");
+
+  if (algorithm !== "pbkdf2_sha256" || !iterationsText || !saltText || !hashText) {
+    return null;
+  }
+
+  const iterations = Number.parseInt(iterationsText, 10);
+  if (!Number.isFinite(iterations) || iterations <= 0) {
+    return null;
+  }
+
+  try {
+    return {
+      iterations,
+      salt: base64UrlDecode(saltText),
+      expectedHash: base64UrlDecode(hashText),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function base64UrlDecode(input: string): Uint8Array {
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  const decoded = atob(padded);
+  const bytes = new Uint8Array(decoded.length);
+
+  for (let index = 0; index < decoded.length; index += 1) {
+    bytes[index] = decoded.charCodeAt(index);
+  }
+
+  return bytes;
+}
+
+function constantTimeEqualBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) {
     return false;
   }
 
   let result = 0;
 
-  for (let index = 0; index < left.length; index += 1) {
-    result |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  for (let index = 0; index < left.byteLength; index += 1) {
+    result |= left[index] ^ right[index];
   }
 
   return result === 0;
