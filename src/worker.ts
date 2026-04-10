@@ -23,6 +23,11 @@ interface Env {
   TOTP_SECRET: string;
 }
 
+interface RateLimitState {
+  failures: number;
+  lockedUntil: number;
+}
+
 type StockStatus = "InStock" | "OutOfStock" | "Unknown";
 
 interface State {
@@ -64,14 +69,8 @@ const worker = {
       return handleUpdateUrl(request, env);
     }
 
-    if (request.method === "GET" && url.pathname === "/check") {
-      try {
-        await runStockCheck(env);
-      } catch {
-        // Errors are persisted in KV for the dashboard to display.
-      }
-
-      return Response.redirect(`${url.origin}/`, 302);
+    if (request.method === "POST" && url.pathname === "/check") {
+      return handleRunCheck(request, env);
     }
 
     return new Response("Not Found", { status: 404 });
@@ -563,7 +562,28 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
               />
               <div class="actions">
                 <button class="button" type="submit">Save URL</button>
-                <a class="button-secondary" href="/check">Run Check Now</a>
+              </div>
+            </form>
+          </article>
+
+          <article class="card">
+            <p class="section-label">Run Check Now</p>
+            <form method="POST" action="/check">
+              <label for="check_totp_code">TOTP Code</label>
+              <input
+                id="check_totp_code"
+                name="totp_code"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]{6}"
+                minlength="6"
+                maxlength="6"
+                required
+                autocomplete="one-time-code"
+                placeholder="123456"
+              />
+              <div class="actions">
+                <button class="button-secondary" type="submit">Run Check Now</button>
               </div>
             </form>
           </article>
@@ -575,6 +595,11 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
+  const csrfError = validateSameOriginRequest(request);
+  if (csrfError) {
+    return csrfError;
+  }
+
   const formData = await request.formData();
   const submittedUrl = String(formData.get("product_url") || "").trim();
   const totpCode = String(formData.get("totp_code") || "").trim();
@@ -596,16 +621,59 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
     return new Response(message, { status: 400 });
   }
 
+  const rateLimitError = await enforceTotpRateLimit(request, env);
+  if (rateLimitError) {
+    return rateLimitError;
+  }
+
   const isTotpValid = await validateTOTP(env.TOTP_SECRET, totpCode);
 
   if (!isTotpValid) {
+    await recordFailedTotpAttempt(request, env);
     return redirectWithError(request, "Invalid TOTP code");
   }
 
+  await clearFailedTotpAttempts(request, env);
   await env.STORE.put("product_url", normalizedUrl);
   await env.STORE.put("product_name", "");
   await env.STORE.put("notified", "false");
   await env.STORE.put("last_error", "");
+
+  try {
+    await runStockCheck(env);
+  } catch {
+    // Errors are persisted in KV for the dashboard to display.
+  }
+
+  return Response.redirect(new URL("/", request.url).toString(), 302);
+}
+
+async function handleRunCheck(request: Request, env: Env): Promise<Response> {
+  const csrfError = validateSameOriginRequest(request);
+  if (csrfError) {
+    return csrfError;
+  }
+
+  const formData = await request.formData();
+  const totpCode = String(formData.get("totp_code") || "").trim();
+
+  if (!/^\d{6}$/.test(totpCode)) {
+    return redirectWithError(request, "Invalid TOTP code");
+  }
+
+  const rateLimitError = await enforceTotpRateLimit(request, env);
+  if (rateLimitError) {
+    return rateLimitError;
+  }
+
+  const isTotpValid = await validateTOTP(env.TOTP_SECRET, totpCode);
+
+  if (!isTotpValid) {
+    await recordFailedTotpAttempt(request, env);
+    return redirectWithError(request, "Invalid TOTP code");
+  }
+
+  await clearFailedTotpAttempts(request, env);
 
   try {
     await runStockCheck(env);
@@ -876,12 +944,113 @@ async function validateTOTP(secret: string, code: string): Promise<boolean> {
 
   for (let offset = -1; offset <= 1; offset += 1) {
     const expected = await generateTOTP(secret, currentCounter + offset);
-    if (expected === code) {
+    if (constantTimeEqual(expected, code)) {
       return true;
     }
   }
 
   return false;
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  let result = 0;
+
+  for (let index = 0; index < left.length; index += 1) {
+    result |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+
+  return result === 0;
+}
+
+function validateSameOriginRequest(request: Request): Response | null {
+  const requestUrl = new URL(request.url);
+  const expectedOrigin = requestUrl.origin;
+  const origin = request.headers.get("Origin");
+  const referer = request.headers.get("Referer");
+
+  if (origin) {
+    if (origin !== expectedOrigin) {
+      return new Response("Forbidden", { status: 403 });
+    }
+
+    return null;
+  }
+
+  if (referer) {
+    try {
+      const refererUrl = new URL(referer);
+      if (refererUrl.origin === expectedOrigin) {
+        return null;
+      }
+    } catch {
+      return new Response("Forbidden", { status: 403 });
+    }
+  }
+
+  return new Response("Forbidden", { status: 403 });
+}
+
+function getClientIdentifier(request: Request): string {
+  const forwardedIp = request.headers.get("CF-Connecting-IP") || request.headers.get("X-Forwarded-For");
+  const ip = forwardedIp?.split(",")[0]?.trim();
+
+  return ip && ip.length > 0 ? ip : "unknown";
+}
+
+function getTotpRateLimitKey(request: Request): string {
+  return `totp_rate_limit:${getClientIdentifier(request)}`;
+}
+
+async function getTotpRateLimitState(request: Request, env: Env): Promise<RateLimitState> {
+  const stored = await env.STORE.get(getTotpRateLimitKey(request));
+
+  if (!stored) {
+    return { failures: 0, lockedUntil: 0 };
+  }
+
+  try {
+    const parsed = JSON.parse(stored) as Partial<RateLimitState>;
+    return {
+      failures: typeof parsed.failures === "number" ? parsed.failures : 0,
+      lockedUntil: typeof parsed.lockedUntil === "number" ? parsed.lockedUntil : 0,
+    };
+  } catch {
+    return { failures: 0, lockedUntil: 0 };
+  }
+}
+
+async function enforceTotpRateLimit(request: Request, env: Env): Promise<Response | null> {
+  const state = await getTotpRateLimitState(request, env);
+
+  if (state.lockedUntil > Date.now()) {
+    return redirectWithError(request, "Too many failed TOTP attempts. Try again later.");
+  }
+
+  return null;
+}
+
+async function recordFailedTotpAttempt(request: Request, env: Env): Promise<void> {
+  const now = Date.now();
+  const state = await getTotpRateLimitState(request, env);
+  const activeFailures = state.lockedUntil > now || state.lockedUntil === 0 ? state.failures : 0;
+  const failures = activeFailures + 1;
+  const nextState: RateLimitState = {
+    failures,
+    lockedUntil: failures >= 5 ? now + 15 * 60 * 1000 : 0,
+  };
+
+  await env.STORE.put(getTotpRateLimitKey(request), JSON.stringify(nextState));
+}
+
+async function clearFailedTotpAttempts(request: Request, env: Env): Promise<void> {
+  await env.STORE.put(
+    getTotpRateLimitKey(request),
+    JSON.stringify({ failures: 0, lockedUntil: 0 } satisfies RateLimitState),
+  );
 }
 
 function validateProductUrl(input: string): string {
@@ -941,6 +1110,12 @@ function htmlResponse(html: string): Response {
   return new Response(html, {
     headers: {
       "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "content-security-policy":
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; img-src 'self' data:; connect-src https://ntfy.sh https://ablecarry.com",
+      "referrer-policy": "same-origin",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
     },
   });
 }
