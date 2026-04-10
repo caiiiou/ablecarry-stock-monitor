@@ -34,12 +34,12 @@ export default {
 
 async function handleDashboard(env) {
   const state = await loadState(env);
-  const productName = getProductNameFromUrl(state.productUrl);
+  const productName = state.productName || "Unknown Product";
   const isInStock = state.lastStatus === "InStock";
   const lastCheckText = state.lastCheck
     ? formatTimestamp(state.lastCheck)
     : "Never";
-  const statusText = state.lastStatus || "Unknown";
+  const statusText = formatStockStatus(state.lastStatus || "Unknown");
 
   return htmlResponse(`<!doctype html>
 <html lang="en">
@@ -363,6 +363,7 @@ async function handleUpdateUrl(request, env) {
   }
 
   await env.STORE.put("product_url", normalizedUrl);
+  await env.STORE.put("product_name", "");
   await env.STORE.put("notified", "false");
   await env.STORE.put("last_error", "");
 
@@ -370,9 +371,10 @@ async function handleUpdateUrl(request, env) {
 }
 
 async function loadState(env) {
-  const [productUrl, lastStatus, lastCheck, lastError, notified] =
+  const [productUrl, productName, lastStatus, lastCheck, lastError, notified] =
     await Promise.all([
       env.STORE.get("product_url"),
+      env.STORE.get("product_name"),
       env.STORE.get("last_status"),
       env.STORE.get("last_check"),
       env.STORE.get("last_error"),
@@ -381,6 +383,7 @@ async function loadState(env) {
 
   return {
     productUrl: productUrl || DEFAULT_PRODUCT_URL,
+    productName: productName || null,
     lastStatus: lastStatus || "OutOfStock",
     lastCheck: lastCheck || null,
     lastError: lastError || null,
@@ -393,7 +396,8 @@ async function runStockCheck(env) {
   const now = new Date().toISOString();
 
   try {
-    const currentStatus = await fetchAvailability(state.productUrl);
+    const { availability: currentStatus, productName } =
+      await fetchProductDetails(state.productUrl);
     const nextNotified =
       currentStatus === "InStock" ? true : false;
     const shouldNotify =
@@ -402,13 +406,14 @@ async function runStockCheck(env) {
 
     await Promise.all([
       env.STORE.put("last_status", currentStatus),
+      env.STORE.put("product_name", productName),
       env.STORE.put("last_check", now),
       env.STORE.put("last_error", ""),
       env.STORE.put("notified", String(nextNotified)),
     ]);
 
     if (shouldNotify) {
-      await sendNotification(state.productUrl, getProductNameFromUrl(state.productUrl));
+      await sendNotification(state.productUrl, productName);
     }
 
     return currentStatus;
@@ -422,7 +427,7 @@ async function runStockCheck(env) {
   }
 }
 
-async function fetchAvailability(productUrl) {
+async function fetchProductDetails(productUrl) {
   const response = await fetch(productUrl, {
     headers: {
       "User-Agent": USER_AGENT,
@@ -435,16 +440,24 @@ async function fetchAvailability(productUrl) {
   }
 
   const html = await response.text();
-  const availability = extractAvailabilityFromJsonLd(html);
+  const productDetails = extractProductDetailsFromJsonLd(html);
+  const { availability, productName } = productDetails;
 
   if (!availability) {
     throw new Error("Could not find offers.availability in JSON-LD");
   }
 
-  return availability.includes("InStock") ? "InStock" : "OutOfStock";
+  if (!productName) {
+    throw new Error("Could not find product name in JSON-LD");
+  }
+
+  return {
+    availability: availability.includes("InStock") ? "InStock" : "OutOfStock",
+    productName,
+  };
 }
 
-function extractAvailabilityFromJsonLd(html) {
+function extractProductDetailsFromJsonLd(html) {
   const scriptRegex =
     /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
 
@@ -456,58 +469,84 @@ function extractAvailabilityFromJsonLd(html) {
 
     try {
       const parsed = JSON.parse(rawJson);
-      const availability = findAvailability(parsed);
-      if (availability) {
-        return availability;
+      const productDetails = findProductDetails(parsed);
+      if (productDetails.availability && productDetails.productName) {
+        return productDetails;
       }
     } catch {
       continue;
     }
   }
 
-  return null;
+  return {
+    availability: null,
+    productName: null,
+  };
 }
 
-function findAvailability(node) {
+function findProductDetails(node) {
   if (!node) {
-    return null;
+    return {
+      availability: null,
+      productName: null,
+    };
   }
 
   if (Array.isArray(node)) {
     for (const item of node) {
-      const result = findAvailability(item);
-      if (result) {
+      const result = findProductDetails(item);
+      if (result.availability && result.productName) {
         return result;
       }
     }
-    return null;
+    return {
+      availability: null,
+      productName: null,
+    };
   }
 
   if (typeof node !== "object") {
-    return null;
+    return {
+      availability: null,
+      productName: null,
+    };
   }
 
+  let productName = typeof node.name === "string" ? node.name.trim() : null;
+  let availability = null;
   const offers = node.offers;
+
   if (offers) {
     if (Array.isArray(offers)) {
       for (const offer of offers) {
         if (offer && typeof offer === "object" && typeof offer.availability === "string") {
-          return offer.availability;
+          availability = offer.availability;
+          break;
         }
       }
     } else if (typeof offers === "object" && typeof offers.availability === "string") {
-      return offers.availability;
+      availability = offers.availability;
     }
+  }
+
+  if (availability && productName) {
+    return { availability, productName };
   }
 
   for (const value of Object.values(node)) {
-    const result = findAvailability(value);
-    if (result) {
-      return result;
+    const result = findProductDetails(value);
+    if (!availability && result.availability) {
+      availability = result.availability;
+    }
+    if (!productName && result.productName) {
+      productName = result.productName;
+    }
+    if (availability && productName) {
+      return { availability, productName };
     }
   }
 
-  return null;
+  return { availability, productName };
 }
 
 async function sendNotification(productUrl, productName) {
@@ -546,19 +585,16 @@ function validateProductUrl(input) {
   return url.toString();
 }
 
-function getProductNameFromUrl(productUrl) {
-  try {
-    const url = new URL(productUrl);
-    const slug = url.pathname.split("/").filter(Boolean).pop() || "unknown-product";
-
-    return slug
-      .split("-")
-      .filter(Boolean)
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(" ");
-  } catch {
-    return "Unknown Product";
+function formatStockStatus(status) {
+  if (status === "OutOfStock") {
+    return "Out of Stock";
   }
+
+  if (status === "InStock") {
+    return "In Stock";
+  }
+
+  return status;
 }
 
 function formatTimestamp(value) {
