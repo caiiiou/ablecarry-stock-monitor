@@ -2,6 +2,7 @@ const DEFAULT_PRODUCT_URL =
   "https://ablecarry.com/products/max-edc-earth-green?variant=51046764577080";
 const NTFY_TOPIC = "ablecarry-stock-monitor";
 const USER_AGENT = "Mozilla/5.0 (compatible; AbleCarryStockMonitor/1.0)";
+const MANUAL_CHECK_COOLDOWN_MS = 5 * 60 * 1000;
 
 interface KVNamespace {
   get(key: string): Promise<string | null>;
@@ -65,6 +66,10 @@ const worker = {
       return handleDashboard(request, env);
     }
 
+    if (request.method === "GET" && url.pathname === "/check") {
+      return handleRunCheck(request, env);
+    }
+
     if (request.method === "POST" && url.pathname === "/url") {
       return handleUpdateUrl(request, env);
     }
@@ -91,11 +96,13 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const state = await loadState(env);
   const formError = url.searchParams.get("error");
+  const cooldownSeconds = parseCooldownSeconds(url.searchParams.get("cooldown"));
   const productName = state.productName || "Unknown Product";
   const productUrlDisplay = formatProductUrlForDisplay(state.productUrl);
   const lastCheckText = state.lastCheck ? formatTimestamp(state.lastCheck) : "Never";
   const statusText = formatStockStatus(state.lastStatus);
   const statusTone = state.lastStatus === "InStock" ? "status-live" : "status-idle";
+  const cooldownDisplay = cooldownSeconds > 0 ? formatCooldown(cooldownSeconds) : null;
 
   return htmlResponse(`<!doctype html>
 <html lang="en">
@@ -441,6 +448,15 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         line-height: 1.5;
       }
 
+      .cooldown-box {
+        padding: 14px 16px;
+        border-radius: 14px;
+        border: 1px solid rgba(94, 235, 212, 0.18);
+        background: rgba(94, 235, 212, 0.08);
+        color: var(--accent);
+        line-height: 1.5;
+      }
+
       @media (max-width: 900px) {
         .layout {
           grid-template-columns: 1fr;
@@ -585,15 +601,16 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
           <article class="card">
             <p class="section-label">Run Check Now</p>
-            <form method="POST" action="/check" data-shared-totp-form>
-              <input type="hidden" name="totp_code" value="" />
-              <div class="actions">
-                <button class="button-secondary totp-gated-button" type="submit">
-                  <span class="lock-icon" aria-hidden="true">🔒</span>
-                  <span>Run Check Now</span>
-                </button>
-              </div>
-            </form>
+            ${
+              cooldownDisplay
+                ? `<div class="cooldown-box" id="cooldown_notice" data-cooldown-seconds="${cooldownSeconds}" role="status">
+              Check available in <span id="cooldown_time">${escapeHtml(cooldownDisplay)}</span>
+            </div>`
+                : ""
+            }
+            <div class="actions">
+              <a class="button-secondary" href="/check">Run Check Now</a>
+            </div>
           </article>
         </aside>
       </section>
@@ -639,6 +656,45 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
         totpInput.addEventListener('input', updateButtons);
         updateButtons();
+      })();
+
+      (() => {
+        const cooldownNotice = document.querySelector('#cooldown_notice');
+        const cooldownTime = document.querySelector('#cooldown_time');
+
+        if (!(cooldownNotice instanceof HTMLElement) || !(cooldownTime instanceof HTMLElement)) {
+          return;
+        }
+
+        let remainingSeconds = Number.parseInt(
+          cooldownNotice.dataset.cooldownSeconds || '0',
+          10,
+        );
+
+        if (!Number.isFinite(remainingSeconds) || remainingSeconds <= 0) {
+          cooldownNotice.style.display = 'none';
+          return;
+        }
+
+        const formatCooldown = (totalSeconds) => {
+          const minutes = Math.floor(totalSeconds / 60);
+          const seconds = totalSeconds % 60;
+          return minutes + ':' + String(seconds).padStart(2, '0');
+        };
+
+        cooldownTime.textContent = formatCooldown(remainingSeconds);
+
+        const intervalId = window.setInterval(() => {
+          remainingSeconds -= 1;
+
+          if (remainingSeconds <= 0) {
+            cooldownNotice.style.display = 'none';
+            window.clearInterval(intervalId);
+            return;
+          }
+
+          cooldownTime.textContent = formatCooldown(remainingSeconds);
+        }, 1000);
       })();
     </script>
   </body>
@@ -700,31 +756,23 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleRunCheck(request: Request, env: Env): Promise<Response> {
-  const csrfError = validateSameOriginRequest(request);
-  if (csrfError) {
-    return csrfError;
+  if (request.method === "POST") {
+    const csrfError = validateSameOriginRequest(request);
+    if (csrfError) {
+      return csrfError;
+    }
   }
 
-  const formData = await request.formData();
-  const totpCode = String(formData.get("totp_code") || "").trim();
+  const now = Date.now();
+  const lastManualCheck = await getLastManualCheck(env);
+  const elapsedMs = now - lastManualCheck;
 
-  if (!/^\d{6}$/.test(totpCode)) {
-    return redirectWithError(request, "Invalid TOTP code");
+  if (lastManualCheck > 0 && elapsedMs < MANUAL_CHECK_COOLDOWN_MS) {
+    const remainingSeconds = Math.ceil((MANUAL_CHECK_COOLDOWN_MS - elapsedMs) / 1000);
+    return redirectWithCooldown(request, remainingSeconds);
   }
 
-  const rateLimitError = await enforceTotpRateLimit(request, env);
-  if (rateLimitError) {
-    return rateLimitError;
-  }
-
-  const isTotpValid = await validateTOTP(env.TOTP_SECRET, totpCode);
-
-  if (!isTotpValid) {
-    await recordFailedTotpAttempt(request, env);
-    return redirectWithError(request, "Invalid TOTP code");
-  }
-
-  await clearFailedTotpAttempts(request, env);
+  await env.STORE.put("last_manual_check", String(now));
 
   try {
     await runStockCheck(env);
@@ -1104,6 +1152,12 @@ async function clearFailedTotpAttempts(request: Request, env: Env): Promise<void
   );
 }
 
+async function getLastManualCheck(env: Env): Promise<number> {
+  const stored = await env.STORE.get("last_manual_check");
+  const parsed = Number.parseInt(stored || "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
 function validateProductUrl(input: string): string {
   let url: URL;
 
@@ -1166,6 +1220,17 @@ function formatProductUrlForDisplay(input: string): string {
   }
 }
 
+function parseCooldownSeconds(value: string | null): number {
+  const parsed = Number.parseInt(value || "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function formatCooldown(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
 function htmlResponse(html: string): Response {
   return new Response(html, {
     headers: {
@@ -1183,6 +1248,12 @@ function htmlResponse(html: string): Response {
 function redirectWithError(request: Request, message: string): Response {
   const redirectUrl = new URL("/", request.url);
   redirectUrl.searchParams.set("error", message);
+  return Response.redirect(redirectUrl.toString(), 302);
+}
+
+function redirectWithCooldown(request: Request, secondsRemaining: number): Response {
+  const redirectUrl = new URL("/", request.url);
+  redirectUrl.searchParams.set("cooldown", String(secondsRemaining));
   return Response.redirect(redirectUrl.toString(), 302);
 }
 
