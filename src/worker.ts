@@ -311,22 +311,27 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
       }
 
       .product-panel {
-        display: grid;
-        gap: 18px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
       }
 
       .product-image-wrap {
         display: flex;
-        justify-content: flex-start;
+        flex-shrink: 0;
       }
 
       .product-thumbnail {
-        width: 120px;
-        height: 120px;
+        width: 96px;
+        height: 96px;
         object-fit: cover;
-        border-radius: 18px;
+        border-radius: 16px;
         border: 1px solid rgba(148, 163, 184, 0.16);
         background: rgba(15, 23, 42, 0.45);
+      }
+
+      .product-panel .metric {
+        flex: 1;
       }
 
       .metric-label {
@@ -557,13 +562,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
           <article class="card">
             <p class="section-label">Product</p>
             <div class="product-panel">
-              ${
-                productImageMarkup
-                  ? `<div class="product-image-wrap">
-                ${productImageMarkup}
-              </div>`
-                  : ""
-              }
               <section class="metric">
                 <p class="metric-label">URL</p>
                 <p class="metric-value">
@@ -572,6 +570,13 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                   </a>
                 </p>
               </section>
+              ${
+                productImageMarkup
+                  ? `<div class="product-image-wrap">
+                ${productImageMarkup}
+              </div>`
+                  : ""
+              }
             </div>
           </article>
 
