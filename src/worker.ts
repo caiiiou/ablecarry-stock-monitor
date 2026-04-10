@@ -269,7 +269,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
       }
 
       .status-pill.status-idle {
-        color: var(--muted);
+        color: #fe4b03;
       }
 
       .dot {
