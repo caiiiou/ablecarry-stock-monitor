@@ -10,4 +10,4 @@ binding = "STORE"
 id = "c908a83a97f24645bd149f705f67781c"
 
 [triggers]
-crons = ["* * * * 1"]
+crons = ["*/10 * * * *"]
