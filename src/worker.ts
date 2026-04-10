@@ -20,6 +20,7 @@ interface ScheduledController {
 
 interface Env {
   STORE: KVNamespace;
+  TOTP_SECRET: string;
 }
 
 type StockStatus = "InStock" | "OutOfStock" | "Unknown";
@@ -56,7 +57,7 @@ const worker = {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/") {
-      return handleDashboard(env);
+      return handleDashboard(request, env);
     }
 
     if (request.method === "POST" && url.pathname === "/url") {
@@ -87,8 +88,10 @@ const worker = {
 
 export default worker;
 
-async function handleDashboard(env: Env): Promise<Response> {
+async function handleDashboard(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
   const state = await loadState(env);
+  const formError = url.searchParams.get("error");
   const productName = state.productName || "Unknown Product";
   const isInStock = state.lastStatus === "InStock";
   const lastCheckText = state.lastCheck ? formatTimestamp(state.lastCheck) : "Never";
@@ -341,7 +344,24 @@ async function handleDashboard(env: Env): Promise<Response> {
         font: inherit;
       }
 
+      input[type="text"] {
+        width: 100%;
+        min-height: 48px;
+        padding: 0 16px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: rgba(15, 23, 42, 0.66);
+        color: var(--text);
+        font: inherit;
+      }
+
       input[type="url"]:focus {
+        outline: none;
+        border-color: rgba(94, 235, 212, 0.42);
+        box-shadow: 0 0 0 4px rgba(94, 235, 212, 0.12);
+      }
+
+      input[type="text"]:focus {
         outline: none;
         border-color: rgba(94, 235, 212, 0.42);
         box-shadow: 0 0 0 4px rgba(94, 235, 212, 0.12);
@@ -397,6 +417,15 @@ async function handleDashboard(env: Env): Promise<Response> {
         color: ${state.lastError ? "#fda4af" : "var(--muted)"};
         white-space: pre-wrap;
         line-height: 1.6;
+      }
+
+      .form-error {
+        padding: 14px 16px;
+        border-radius: 14px;
+        border: 1px solid rgba(251, 113, 133, 0.2);
+        background: rgba(127, 29, 29, 0.3);
+        color: #fecdd3;
+        line-height: 1.5;
       }
 
       @media (max-width: 900px) {
@@ -505,6 +534,11 @@ async function handleDashboard(env: Env): Promise<Response> {
           <article class="card">
             <p class="section-label">Update URL</p>
             <form method="POST" action="/url">
+              ${
+                formError
+                  ? `<div class="form-error" role="alert">${escapeHtml(formError)}</div>`
+                  : ""
+              }
               <label for="product_url">Able Carry product URL</label>
               <input
                 id="product_url"
@@ -513,6 +547,19 @@ async function handleDashboard(env: Env): Promise<Response> {
                 required
                 value="${escapeHtml(state.productUrl)}"
                 placeholder="${escapeHtml(DEFAULT_PRODUCT_URL)}"
+              />
+              <label for="totp_code">TOTP Code</label>
+              <input
+                id="totp_code"
+                name="totp_code"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]{6}"
+                minlength="6"
+                maxlength="6"
+                required
+                autocomplete="one-time-code"
+                placeholder="123456"
               />
               <div class="actions">
                 <button class="button" type="submit">Save URL</button>
@@ -530,9 +577,14 @@ async function handleDashboard(env: Env): Promise<Response> {
 async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
   const formData = await request.formData();
   const submittedUrl = String(formData.get("product_url") || "").trim();
+  const totpCode = String(formData.get("totp_code") || "").trim();
 
   if (!submittedUrl) {
     return new Response("Missing product_url", { status: 400 });
+  }
+
+  if (!/^\d{6}$/.test(totpCode)) {
+    return redirectWithError(request, "Invalid TOTP code");
   }
 
   let normalizedUrl: string;
@@ -542,6 +594,12 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid URL";
     return new Response(message, { status: 400 });
+  }
+
+  const isTotpValid = await validateTOTP(env.TOTP_SECRET, totpCode);
+
+  if (!isTotpValid) {
+    return redirectWithError(request, "Invalid TOTP code");
   }
 
   await env.STORE.put("product_url", normalizedUrl);
@@ -754,6 +812,72 @@ async function sendNotification(productUrl: string, productName: string): Promis
   }
 }
 
+function base32Decode(input: string): Uint8Array {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const normalized = input.toUpperCase().replace(/[\s=]+/g, "");
+  let bits = 0;
+  let value = 0;
+  const bytes: number[] = [];
+
+  for (const char of normalized) {
+    const index = alphabet.indexOf(char);
+    if (index === -1) {
+      throw new Error("Invalid base32 secret");
+    }
+
+    value = (value << 5) | index;
+    bits += 5;
+
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((value >>> bits) & 0xff);
+    }
+  }
+
+  return new Uint8Array(bytes);
+}
+
+async function generateTOTP(secret: string, counter: number): Promise<string> {
+  const secretBytes = base32Decode(secret);
+  const key = await crypto.subtle.importKey(
+    "raw",
+    secretBytes,
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"],
+  );
+  const counterBytes = new ArrayBuffer(8);
+  const counterView = new DataView(counterBytes);
+  const high = Math.floor(counter / 2 ** 32);
+  const low = counter >>> 0;
+  counterView.setUint32(0, high, false);
+  counterView.setUint32(4, low, false);
+
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, counterBytes));
+  const offset = signature[signature.length - 1] & 0x0f;
+  const binary =
+    ((signature[offset] & 0x7f) << 24) |
+    ((signature[offset + 1] & 0xff) << 16) |
+    ((signature[offset + 2] & 0xff) << 8) |
+    (signature[offset + 3] & 0xff);
+  const otp = binary % 1_000_000;
+
+  return otp.toString().padStart(6, "0");
+}
+
+async function validateTOTP(secret: string, code: string): Promise<boolean> {
+  const currentCounter = Math.floor(Date.now() / 1000 / 30);
+
+  for (let offset = -1; offset <= 1; offset += 1) {
+    const expected = await generateTOTP(secret, currentCounter + offset);
+    if (expected === code) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function validateProductUrl(input: string): string {
   let url: URL;
 
@@ -813,6 +937,12 @@ function htmlResponse(html: string): Response {
       "content-type": "text/html; charset=utf-8",
     },
   });
+}
+
+function redirectWithError(request: Request, message: string): Response {
+  const redirectUrl = new URL("/", request.url);
+  redirectUrl.searchParams.set("error", message);
+  return Response.redirect(redirectUrl.toString(), 302);
 }
 
 function escapeHtml(value: string | null): string {

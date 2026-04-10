@@ -11,3 +11,6 @@ id = "c908a83a97f24645bd149f705f67781c"
 
 [triggers]
 crons = ["* * * * *"]
+
+[triggers]
+crons = ["* * * * *"]
