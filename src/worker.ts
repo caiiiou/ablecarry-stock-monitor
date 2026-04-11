@@ -808,6 +808,7 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
     productName: null,
     productImage: null,
     lastStatus: "Unknown",
+    lastInStock: null,
     notified: false,
   };
   try {
