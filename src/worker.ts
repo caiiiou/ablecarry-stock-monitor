@@ -330,8 +330,9 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
       .product-name {
         margin: 0;
         color: #f8fafc;
-        font-size: clamp(1.4rem, 2.8vw, 2.1rem);
-        line-height: 1.15;
+        font-size: 1.08rem;
+        font-weight: 600;
+        line-height: 1.4;
       }
 
       .product-image-card {
@@ -601,21 +602,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
           </article>
 
           <article class="card">
-            <p class="section-label">Product</p>
-            <div class="product-card">
-              <h2 class="product-name">${escapeHtml(productName)}</h2>
-              <section class="metric">
-                <p class="metric-label">URL</p>
-                <p class="metric-value">
-                  <a class="link" href="${escapeHtml(state.productUrl)}" target="_blank" rel="noreferrer">
-                    ${escapeHtml(productUrlDisplay)}
-                  </a>
-                </p>
-              </section>
-            </div>
-          </article>
-
-          <article class="card">
             <p class="section-label">Update URL</p>
             <form method="POST" action="/url">
               ${
@@ -665,6 +651,20 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         </div>
 
         <aside class="stack">
+          <article class="card">
+            <p class="section-label">Product</p>
+            <div class="product-card">
+              <p class="product-name">${escapeHtml(productName)}</p>
+              <section class="metric">
+                <p class="metric-label">URL</p>
+                <p class="metric-value">
+                  <a class="link" href="${escapeHtml(state.productUrl)}" target="_blank" rel="noreferrer">
+                    ${escapeHtml(productUrlDisplay)}
+                  </a>
+                </p>
+              </section>
+            </div>
+          </article>
           ${
             productImageMarkup
               ? `<article class="card product-image-card">
