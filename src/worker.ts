@@ -145,6 +145,8 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
       body {
         margin: 0;
         min-height: 100vh;
+        display: flex;
+        align-items: center;
         font-family: Inter, system-ui, ui-sans-serif, sans-serif;
         background:
           radial-gradient(circle at top left, rgba(94, 235, 212, 0.08), transparent 28%),
@@ -208,8 +210,9 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
       .layout {
         display: grid;
-        grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.95fr);
+        grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
         gap: 18px;
+        align-items: stretch;
       }
 
       .stack {
@@ -294,27 +297,49 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
       }
 
       .product-panel {
-        display: flex;
-        align-items: center;
-        gap: 16px;
+        display: grid;
+        gap: 14px;
       }
 
       .product-image-wrap {
         display: flex;
-        flex-shrink: 0;
+        align-items: center;
+        justify-content: center;
+        min-height: 100%;
       }
 
       .product-thumbnail {
-        width: 96px;
-        height: 96px;
+        width: min(100%, 360px);
+        aspect-ratio: 1 / 1;
         object-fit: cover;
-        border-radius: 16px;
+        border-radius: 28px;
         border: 1px solid rgba(148, 163, 184, 0.16);
         background: rgba(15, 23, 42, 0.45);
+        box-shadow: 0 28px 60px rgba(2, 6, 23, 0.36);
       }
 
       .product-panel .metric {
         flex: 1;
+      }
+
+      .product-card {
+        display: grid;
+        gap: 18px;
+      }
+
+      .product-name {
+        margin: 0;
+        color: #f8fafc;
+        font-size: clamp(1.4rem, 2.8vw, 2.1rem);
+        line-height: 1.15;
+      }
+
+      .product-image-card {
+        display: flex;
+      }
+
+      .product-image-card .product-image-wrap {
+        width: 100%;
       }
 
       .metric-label {
@@ -492,6 +517,10 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
       }
 
       @media (max-width: 900px) {
+        body {
+          display: block;
+        }
+
         .layout {
           grid-template-columns: 1fr;
         }
@@ -519,8 +548,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
         .product-thumbnail {
           width: 100%;
-          max-width: 140px;
-          height: auto;
+          max-width: 100%;
         }
 
         .actions {
@@ -574,7 +602,8 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
           <article class="card">
             <p class="section-label">Product</p>
-            <div class="product-panel">
+            <div class="product-card">
+              <h2 class="product-name">${escapeHtml(productName)}</h2>
               <section class="metric">
                 <p class="metric-label">URL</p>
                 <p class="metric-value">
@@ -583,19 +612,9 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                   </a>
                 </p>
               </section>
-              ${
-                productImageMarkup
-                  ? `<div class="product-image-wrap">
-                ${productImageMarkup}
-              </div>`
-                  : ""
-              }
             </div>
           </article>
 
-        </div>
-
-        <aside class="stack">
           <article class="card">
             <p class="section-label">Update URL</p>
             <form method="POST" action="/url">
@@ -643,6 +662,18 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
               </div>
             </form>
           </article>
+        </div>
+
+        <aside class="stack">
+          ${
+            productImageMarkup
+              ? `<article class="card product-image-card">
+            <div class="product-image-wrap">
+              ${productImageMarkup}
+            </div>
+          </article>`
+              : ""
+          }
         </aside>
       </section>
     </main>
