@@ -712,6 +712,11 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
             }, 240);
           });
         }, 5000);
+        const currentUrl = new URL(window.location.href);
+        if (currentUrl.searchParams.has('error')) {
+          currentUrl.searchParams.delete('error');
+          window.history.replaceState({}, '', currentUrl.toString());
+        }
         const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         document.querySelectorAll('time[data-local]').forEach((element) => {
           if (!(element instanceof HTMLTimeElement)) {
