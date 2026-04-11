@@ -507,10 +507,17 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         background: rgba(127, 29, 29, 0.3);
         color: #fecdd3;
         line-height: 1.5;
+        transition: opacity 220ms ease-out, transform 220ms ease-out;
       }
 
       .form-error-inline {
         margin-top: -6px;
+      }
+
+      .form-error.is-dismissed {
+        opacity: 0;
+        transform: translateY(-4px);
+        pointer-events: none;
       }
 
       input[aria-invalid="true"] {
@@ -605,11 +612,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
           <article class="card">
             <p class="section-label">Update URL</p>
             <form method="POST" action="/url">
-              ${
-                formError
-                  ? `<div class="form-error" role="alert">${escapeHtml(formError)}</div>`
-                  : ""
-              }
               <label for="product_url">Able Carry Product URL</label>
               <input
                 id="product_url"
@@ -640,6 +642,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                   ? `<div
                 id="shared_totp_code_error"
                 class="form-error form-error-inline"
+                data-auto-dismiss="true"
                 role="alert"
               >${escapeHtml(formError)}</div>`
                   : ""
@@ -697,6 +700,18 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
         resetProductUrlInput();
         window.addEventListener('pageshow', resetProductUrlInput);
+        window.setTimeout(() => {
+          document.querySelectorAll('[data-auto-dismiss="true"]').forEach((element) => {
+            if (!(element instanceof HTMLElement)) {
+              return;
+            }
+
+            element.classList.add('is-dismissed');
+            window.setTimeout(() => {
+              element.remove();
+            }, 240);
+          });
+        }, 5000);
         const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         document.querySelectorAll('time[data-local]').forEach((element) => {
           if (!(element instanceof HTMLTimeElement)) {
