@@ -1161,7 +1161,7 @@ async function recordFailedTotpAttempt(request: Request, env: Env): Promise<void
   const failures = activeFailures + 1;
   const nextState: RateLimitState = {
     failures,
-    lockedUntil: failures >= 1 ? now + 15 * 60 * 1000 : 0,
+    lockedUntil: failures >= 1 ? now + 24 * 60 * 60 * 1000 : 0,
   };
 
   await env.STORE.put(getTotpRateLimitKey(request), JSON.stringify(nextState));
