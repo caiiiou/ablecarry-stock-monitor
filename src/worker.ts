@@ -101,7 +101,8 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
     : "";
   const statusText = formatStockStatus(state.lastStatus);
   const statusTone = state.lastStatus === "InStock" ? "status-live" : "status-idle";
-  const lastInStockMarkup = renderLocalTime(state.lastInStock);
+  const lastInStockMarkup =
+    state.lastStatus === "InStock" ? "Now" : renderLocalTime(state.lastInStock);
 
   return htmlResponse(`<!doctype html>
 <html lang="en">
@@ -814,12 +815,13 @@ async function runStockCheck(
     );
     const shouldNotify =
       currentStatus === "InStock" && (!state.notified || state.lastStatus !== "InStock");
+    const shouldRefreshLastInStock = currentStatus === "InStock" && state.lastStatus !== "InStock";
     const next: State = {
       ...state,
       productName,
       productImage,
       lastStatus: currentStatus,
-      lastInStock: currentStatus === "InStock" ? now : state.lastInStock,
+      lastInStock: shouldRefreshLastInStock ? now : state.lastInStock,
       notified: currentStatus === "InStock",
     };
 
