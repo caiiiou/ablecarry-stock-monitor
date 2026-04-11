@@ -89,7 +89,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const state = await loadState(env);
   const formError = url.searchParams.get("error");
-  const productName = state.productName || "Unknown Product";
+  const productName = formatProductNameForDisplay(state.productName, state.productUrl);
   const productUrlDisplay = formatProductUrlForDisplay(state.productUrl);
   const productImageMarkup = state.productImage
     ? `<img
@@ -985,7 +985,7 @@ function findProductDetails(node: JsonValue | undefined): ProductSearchResult {
 function extractImageUrl(value: JsonValue | undefined): string | null {
   if (typeof value === "string") {
     const imageUrl = value.trim();
-    return imageUrl.length > 0 ? imageUrl : null;
+    return imageUrl.length > 0 ? normalizeProductImageUrl(imageUrl) : null;
   }
 
   if (Array.isArray(value)) {
@@ -1007,10 +1007,30 @@ function extractImageUrl(value: JsonValue | undefined): string | null {
           ? value.contentUrl
           : null;
 
-    return candidate && candidate.trim().length > 0 ? candidate.trim() : null;
+    return candidate && candidate.trim().length > 0
+      ? normalizeProductImageUrl(candidate.trim())
+      : null;
   }
 
   return null;
+}
+
+function normalizeProductImageUrl(input: string): string {
+  try {
+    const url = new URL(input);
+    const isAbleCarryShopifyImage =
+      url.hostname === "ablecarry.com" && url.pathname.startsWith("/cdn/shop/files/");
+
+    if (!isAbleCarryShopifyImage) {
+      return input;
+    }
+
+    url.pathname = url.pathname.replace(/_(\d+)x(\d+)(\.[a-z0-9]+)$/i, "$3");
+    url.searchParams.set("width", "1600");
+    return url.toString();
+  } catch {
+    return input;
+  }
 }
 
 async function sendNotification(productUrl: string, productName: string): Promise<void> {
@@ -1252,6 +1272,57 @@ function formatProductUrlForDisplay(input: string): string {
   } catch {
     return input;
   }
+}
+
+function formatProductNameForDisplay(name: string | null, productUrl: string): string {
+  const baseName = name?.trim() || "Unknown Product";
+  const color = extractColorFromProductUrl(productUrl, baseName);
+
+  if (!color) {
+    return baseName;
+  }
+
+  return `${baseName} ${color}`;
+}
+
+function extractColorFromProductUrl(productUrl: string, productName: string): string | null {
+  try {
+    const url = new URL(productUrl);
+    const slug = url.pathname.split("/").filter(Boolean).at(-1);
+    if (!slug) {
+      return null;
+    }
+
+    const productSlug = slug.toLowerCase();
+    const nameSlug = slugifyProductName(productName);
+    const colorSlug =
+      nameSlug && productSlug.startsWith(`${nameSlug}-`)
+        ? productSlug.slice(nameSlug.length + 1)
+        : null;
+
+    if (!colorSlug) {
+      return null;
+    }
+
+    const colorLabel = colorSlug
+      .split("-")
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+
+    return colorLabel.length > 0 && !productName.toLowerCase().includes(colorLabel.toLowerCase())
+      ? colorLabel
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function slugifyProductName(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function parseState(value: string | null): State {
