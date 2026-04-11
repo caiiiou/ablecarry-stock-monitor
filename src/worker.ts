@@ -618,7 +618,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
                 value="${escapeHtml(state.productUrl)}"
                 data-current-url="${escapeHtml(state.productUrl)}"
                 autocomplete="off"
-                placeholder="${escapeHtml(DEFAULT_PRODUCT_URL)}"
+                placeholder="${escapeHtml(state.productUrl)}"
               />
               <label for="shared_totp_code">TOTP Code</label>
               <input
@@ -1166,19 +1166,12 @@ function validateSameOriginRequest(request: Request): Response | null {
   return new Response("Forbidden", { status: 403 });
 }
 
-function getClientIdentifier(request: Request): string {
-  const forwardedIp = request.headers.get("CF-Connecting-IP") || request.headers.get("X-Forwarded-For");
-  const ip = forwardedIp?.split(",")[0]?.trim();
-
-  return ip && ip.length > 0 ? ip : "unknown";
-}
-
-function getTotpRateLimitKey(request: Request): string {
-  return `totp_rate_limit:${getClientIdentifier(request)}`;
+function getTotpRateLimitKey(): string {
+  return "totp_rate_limit";
 }
 
 async function getTotpRateLimitState(request: Request, env: Env): Promise<RateLimitState> {
-  const stored = await env.STORE.get(getTotpRateLimitKey(request));
+  const stored = await env.STORE.get(getTotpRateLimitKey());
 
   if (!stored) {
     return { failures: 0, lockedUntil: 0 };
@@ -1215,12 +1208,12 @@ async function recordFailedTotpAttempt(request: Request, env: Env): Promise<void
     lockedUntil: failures >= 1 ? now + 24 * 60 * 60 * 1000 : 0,
   };
 
-  await env.STORE.put(getTotpRateLimitKey(request), JSON.stringify(nextState));
+  await env.STORE.put(getTotpRateLimitKey(), JSON.stringify(nextState));
 }
 
 async function clearFailedTotpAttempts(request: Request, env: Env): Promise<void> {
   await env.STORE.put(
-    getTotpRateLimitKey(request),
+    getTotpRateLimitKey(),
     JSON.stringify({ failures: 0, lockedUntil: 0 } satisfies RateLimitState),
   );
 }
