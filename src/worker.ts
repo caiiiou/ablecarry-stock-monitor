@@ -462,6 +462,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         display: flex;
         flex-wrap: wrap;
         gap: 12px;
+        margin-top: 8px;
       }
 
       .button,
