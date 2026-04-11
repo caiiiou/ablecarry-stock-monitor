@@ -1,2 +1,8 @@
-node_modules/
-.wrangler/
+node_modules                                                                                                                                                                      
+.astro
+.next
+dist
+out
+.DS_Store
+._*
+.wrangler
