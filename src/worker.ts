@@ -35,9 +35,7 @@ interface State {
   productName: string | null;
   productImage: string | null;
   lastStatus: StockStatus;
-  lastCheck: string | null;
   lastInStock: string | null;
-  lastError: string | null;
   notified: boolean;
 }
 
@@ -103,7 +101,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
     : "";
   const statusText = formatStockStatus(state.lastStatus);
   const statusTone = state.lastStatus === "InStock" ? "status-live" : "status-idle";
-  const lastCheckMarkup = renderLocalTime(state.lastCheck);
   const lastInStockMarkup = renderLocalTime(state.lastInStock);
 
   return htmlResponse(`<!doctype html>
@@ -476,17 +473,6 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
         background: var(--bg-hover);
       }
 
-      .error-box {
-        min-height: 120px;
-        padding: 18px;
-        border-radius: 18px;
-        border: 1px solid var(--border);
-        background: rgba(15, 23, 42, 0.34);
-        color: ${state.lastError ? "#fda4af" : "var(--muted)"};
-        white-space: pre-wrap;
-        line-height: 1.6;
-      }
-
       .form-error {
         padding: 14px 16px;
         border-radius: 14px;
@@ -572,8 +558,8 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
 
             <div class="metric-grid">
               <section class="metric">
-                <p class="metric-label">Last Check</p>
-                <p class="metric-value">${lastCheckMarkup}</p>
+                <p class="metric-label">Last In Stock</p>
+                <p class="metric-value">${lastInStockMarkup}</p>
               </section>
               <section class="metric">
                 <p class="metric-label">Ntfy Topic</p>
@@ -607,20 +593,9 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
             </div>
           </article>
 
-          <article class="card">
-            <p class="section-label">Last Error</p>
-            <div class="error-box">${escapeHtml(state.lastError || "None")}</div>
-          </article>
         </div>
 
         <aside class="stack">
-          <article class="card">
-            <p class="section-label">Last In Stock</p>
-            <section class="metric">
-              <p class="metric-value">${lastInStockMarkup}</p>
-            </section>
-          </article>
-
           <article class="card">
             <p class="section-label">Update URL</p>
             <form method="POST" action="/url">
@@ -779,13 +754,12 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
     productUrl: normalizedUrl,
     productName: null,
     productImage: null,
-    lastError: null,
     notified: false,
   };
   try {
     await runStockCheck(env, next);
   } catch {
-    // Errors are persisted in KV for the dashboard to display.
+    // Errors are allowed to fail silently so the dashboard remains usable.
   }
 
   return Response.redirect(new URL("/", request.url).toString(), 302);
@@ -814,9 +788,7 @@ async function runStockCheck(
       productName,
       productImage,
       lastStatus: currentStatus,
-      lastCheck: now,
       lastInStock: currentStatus === "InStock" ? now : state.lastInStock,
-      lastError: null,
       notified: currentStatus === "InStock",
     };
 
@@ -828,11 +800,9 @@ async function runStockCheck(
 
     return currentStatus;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
     const next: State = {
       ...state,
-      lastCheck: now,
-      lastError: message,
+      lastStatus: "Unknown",
     };
     await env.STORE.put("state", JSON.stringify(next));
     throw error;
@@ -1191,7 +1161,7 @@ async function recordFailedTotpAttempt(request: Request, env: Env): Promise<void
   const failures = activeFailures + 1;
   const nextState: RateLimitState = {
     failures,
-    lockedUntil: failures >= 5 ? now + 15 * 60 * 1000 : 0,
+    lockedUntil: failures >= 1 ? now + 15 * 60 * 1000 : 0,
   };
 
   await env.STORE.put(getTotpRateLimitKey(request), JSON.stringify(nextState));
@@ -1270,9 +1240,7 @@ function parseState(value: string | null): State {
       lastStatus: normalizeStockStatus(
         typeof parsed.lastStatus === "string" ? parsed.lastStatus : null,
       ),
-      lastCheck: typeof parsed.lastCheck === "string" ? parsed.lastCheck : null,
       lastInStock: typeof parsed.lastInStock === "string" ? parsed.lastInStock : null,
-      lastError: typeof parsed.lastError === "string" ? parsed.lastError : null,
       notified: parsed.notified === true,
     };
   } catch {
@@ -1286,9 +1254,7 @@ function defaultState(): State {
     productName: null,
     productImage: null,
     lastStatus: "Unknown",
-    lastCheck: null,
     lastInStock: null,
-    lastError: null,
     notified: false,
   };
 }
