@@ -750,12 +750,22 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
     return new Response(message, { status: 400 });
   }
 
+  const totpSecret = getConfiguredTotpSecret(env);
+  if (!totpSecret) {
+    return new Response("TOTP is not configured on this worker", { status: 500 });
+  }
+
   const rateLimitError = await enforceTotpRateLimit(request, env);
   if (rateLimitError) {
     return rateLimitError;
   }
 
-  const isTotpValid = await validateTOTP(env.TOTP_SECRET, totpCode);
+  let isTotpValid = false;
+  try {
+    isTotpValid = await validateTOTP(totpSecret, totpCode);
+  } catch {
+    return new Response("TOTP is misconfigured on this worker", { status: 500 });
+  }
 
   if (!isTotpValid) {
     await recordFailedTotpAttempt(request, env);
@@ -1082,6 +1092,15 @@ async function validateTOTP(secret: string, code: string): Promise<boolean> {
   }
 
   return false;
+}
+
+function getConfiguredTotpSecret(env: Env): string | null {
+  if (typeof env.TOTP_SECRET !== "string") {
+    return null;
+  }
+
+  const secret = env.TOTP_SECRET.trim();
+  return secret.length > 0 ? secret : null;
 }
 
 function constantTimeEqual(left: string, right: string): boolean {

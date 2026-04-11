@@ -30,6 +30,18 @@ The app includes a lightweight dashboard at `/` where you can:
 
 Updating the tracked URL is protected, and the worker validates the submitted product link before saving it.
 
+## Configuration
+
+The dashboard's URL update form requires a TOTP secret stored as the Cloudflare Worker secret `TOTP_SECRET`.
+
+Set it before deploying:
+
+```bash
+wrangler secret put TOTP_SECRET
+```
+
+The secret value must be a Base32-encoded TOTP seed compatible with authenticator apps.
+
 ## Scope
 
 This project is intentionally focused on monitoring a single Able Carry product at a time. It is designed as a small personal utility rather than a general-purpose inventory tracking system.
