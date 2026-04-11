@@ -789,9 +789,9 @@ async function handleUpdateUrl(request: Request, env: Env): Promise<Response> {
     notified: false,
   };
   try {
-    await runStockCheck(env, next);
+    await runStockCheck(env, next, false);
   } catch {
-    // Errors are allowed to fail silently so the dashboard remains usable.
+    return redirectWithError(request, "Could not load that product URL");
   }
 
   return Response.redirect(new URL("/", request.url).toString(), 302);
@@ -805,6 +805,7 @@ async function loadState(env: Env): Promise<State> {
 async function runStockCheck(
   env: Env,
   stateOverride?: State,
+  persistErrorState = true,
 ): Promise<"InStock" | "OutOfStock"> {
   const state = stateOverride ?? (await loadState(env));
   const now = new Date().toISOString();
@@ -825,7 +826,9 @@ async function runStockCheck(
       notified: currentStatus === "InStock",
     };
 
-    await env.STORE.put("state", JSON.stringify(next));
+    if (!statesEqual(state, next)) {
+      await env.STORE.put("state", JSON.stringify(next));
+    }
 
     if (shouldNotify) {
       await sendNotification(state.productUrl, productName);
@@ -837,7 +840,9 @@ async function runStockCheck(
       ...state,
       lastStatus: "Unknown",
     };
-    await env.STORE.put("state", JSON.stringify(next));
+    if (persistErrorState && !statesEqual(state, next)) {
+      await env.STORE.put("state", JSON.stringify(next));
+    }
     throw error;
   }
 }
@@ -1214,6 +1219,11 @@ async function recordFailedTotpAttempt(request: Request, env: Env): Promise<void
 }
 
 async function clearFailedTotpAttempts(request: Request, env: Env): Promise<void> {
+  const state = await getTotpRateLimitState(request, env);
+  if (state.failures === 0 && state.lockedUntil === 0) {
+    return;
+  }
+
   await env.STORE.put(
     getTotpRateLimitKey(),
     JSON.stringify({ failures: 0, lockedUntil: 0 } satisfies RateLimitState),
@@ -1364,6 +1374,17 @@ function renderLocalTime(value: string | null): string {
   const date = new Date(value);
   const fallback = Number.isNaN(date.getTime()) ? value : date.toISOString();
   return `<time datetime="${escapeHtml(value)}" data-local>${escapeHtml(fallback)}</time>`;
+}
+
+function statesEqual(left: State, right: State): boolean {
+  return (
+    left.productUrl === right.productUrl &&
+    left.productName === right.productName &&
+    left.productImage === right.productImage &&
+    left.lastStatus === right.lastStatus &&
+    left.lastInStock === right.lastInStock &&
+    left.notified === right.notified
+  );
 }
 
 function htmlResponse(html: string): Response {
