@@ -1,47 +1,31 @@
 # ablecarry-stock-monitor
 
-`ablecarry-stock-monitor` is a Cloudflare Worker that keeps an eye on an Able Carry product page and sends an `ntfy.sh` alert when the item comes back in stock.
+`ablecarry-stock-monitor` watches a single Able Carry product page and posts an alert to `ntfy.sh` when that item comes back in stock.
 
 ## Overview
 
-The project is built around a simple flow:
+The public instance is meant to be a small, focused stock tracker:
 
-- watch one product page
-- check its current availability on a schedule
-- notify when stock returns
-- show the current state in a small dashboard
-
-The dashboard provides a quick view of the tracked product, its latest stock status, recent check activity, and any recorded errors.
-
-## How It Works
-
-The worker periodically checks the configured Able Carry product page and reads the product availability from the page data. When the product moves back into stock, it sends a notification to the `ablecarry-stock-monitor` topic on `ntfy.sh`.
-
-To avoid noisy alerts, it does not repeatedly notify while the item stays in stock.
+- it follows one Able Carry product at a time
+- it checks the product page on a schedule
+- it sends a notification when stock returns
+- it shows the current tracked item and status in a lightweight dashboard
 
 ## Dashboard
 
-The app includes a lightweight dashboard at `/` where you can:
+The dashboard gives a quick read on the current monitor state, including:
 
-- view the current product being tracked
-- see the latest stock status
-- review recent check information
-- update the tracked product URL
+- the product currently being tracked
+- whether it is in stock right now
+- the most recent in-stock event
+- the `ntfy.sh` topic used for alerts
 
-Updating the tracked URL is protected, and the worker validates the submitted product link before saving it.
+## Notifications
 
-## Configuration
+When the tracked product comes back in stock, the monitor posts to the `ablecarry-stock-monitor` topic on `ntfy.sh`.
 
-The dashboard's URL update form requires a TOTP secret stored as the Cloudflare Worker secret `TOTP_SECRET`.
-
-Set it before deploying:
-
-```bash
-wrangler secret put TOTP_SECRET
-```
-
-The secret value must be a Base32-encoded TOTP seed compatible with authenticator apps.
+To keep alerts useful, it does not keep sending repeated notifications while the item remains in stock.
 
 ## Scope
 
-This project is intentionally focused on monitoring a single Able Carry product at a time. It is designed as a small personal utility rather than a general-purpose inventory tracking system.
+This project is intentionally narrow. It is a simple public stock monitor for one Able Carry product at a time, not a general-purpose inventory tracker.
