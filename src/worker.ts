@@ -711,7 +711,7 @@ async function handleDashboard(request: Request, env: Env): Promise<Response> {
               element.remove();
             }, 240);
           });
-        }, 5000);
+        }, 3000);
         const currentUrl = new URL(window.location.href);
         if (currentUrl.searchParams.has('error')) {
           currentUrl.searchParams.delete('error');
